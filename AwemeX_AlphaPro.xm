@@ -653,7 +653,9 @@ static char kAXContinuityHiddenMarkKey;
 static void AXSetContinuityHidden(UIView *v, BOOL hidden) {
     if (!v || AXIsAwemeXPanelView(v)) return;
     [AXTrackedContinuityViews() addObject:v];
-    objc_setAssociatedObject(v, &kAXContinuityHiddenMarkKey, hidden ? (id)@YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // 这里的标记表示“这个 view 曾被识别为连播浮层”，不要在显示时清除。
+    // 否则开关关闭后再打开，已识别的连播 view 不会被立即重新隐藏，必须等重建/重启才生效。
+    objc_setAssociatedObject(v, &kAXContinuityHiddenMarkKey, (id)@YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     v.hidden = hidden;
     v.alpha = hidden ? 0.0 : 1.0;
     v.userInteractionEnabled = !hidden;
@@ -1099,7 +1101,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     [aboutCard addSubview:versionTitle];
 
     UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
-    versionValue.text = @"V40";
+    versionValue.text = @"V41";
     versionValue.textColor = AXPanelSubTextColor();
     versionValue.font = [UIFont boldSystemFontOfSize:14];
     versionValue.textAlignment = NSTextAlignmentRight;
@@ -1277,7 +1279,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         [panel addSubview:close];
 
         UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(24, 58, panelW - 48, 24)];
-        sub.text = @"AwemeX for iPad · 当前版本 V40";
+        sub.text = @"AwemeX for iPad · 当前版本 V41";
         sub.textColor = [UIColor colorWithWhite:0.35 alpha:1.0];
         sub.font = [UIFont systemFontOfSize:13];
         [panel addSubview:sub];
@@ -1291,7 +1293,10 @@ static void AXReloadSettingsContent(BOOL animated) {
         text.textContainerInset = UIEdgeInsetsMake(0, 0, 20, 0);
         text.font = [UIFont systemFontOfSize:14];
         text.textColor = [UIColor colorWithWhite:0.18 alpha:1.0];
-        text.text = @"V40（右侧连播开关即时刷新）\n"
+        text.text = @"V41（右侧连播开关记忆修复）\n"
+                    "· 修复隐藏右侧连播关闭后再打开不能立即重新隐藏的问题。\n"
+                    "· 保持其它稳定功能不动。\n\n"
+                    "V40（右侧连播开关即时刷新）\n"
                     "· 修复隐藏右侧连播关闭后再打开需要重启抖音才生效的问题。\n"
                     "· 保持 V39 的连播强力命中逻辑、左上菜单隐藏、透明度、保存面板与音效等稳定逻辑不动。\n\n"
                     "V39（右侧连播隐藏强力命中）\n"
