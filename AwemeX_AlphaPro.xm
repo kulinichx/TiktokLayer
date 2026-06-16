@@ -32,6 +32,14 @@ static NSString * const kAXShowButton = @"ax_show_button";
 static NSString * const kAXOFNicknameDescAlpha = @"ax_nickname_desc_alpha";
 static NSString * const kAXHideRelatedArea = @"ax_hide_related_area";
 
+// 单指长按面板功能开关：来自 DYYY 长按面板保存类功能；不包含“生成视频/制作视频”。
+static NSString * const kAXLPPanelSaveVideo = @"ax_lp_panel_save_video";
+static NSString * const kAXLPPanelSaveCover = @"ax_lp_panel_save_cover";
+static NSString * const kAXLPPanelSaveAudio = @"ax_lp_panel_save_audio";
+static NSString * const kAXLPPanelSaveImage = @"ax_lp_panel_save_image";
+static NSString * const kAXLPPanelSaveAllImages = @"ax_lp_panel_save_all_images";
+static NSString * const kAXLPPanelCopyText = @"ax_lp_panel_copy_text";
+
 static CGFloat AXFloat(NSString *key, CGFloat def) {
     id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
     return v ? [v floatValue] : def;
@@ -659,6 +667,12 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
     if (sender.tag == 11) key = kAXHideSearch;
     else if (sender.tag == 12) key = kAXHideRelatedArea;
     else if (sender.tag == 13) key = kAXShowButton;
+    else if (sender.tag == 21) key = kAXLPPanelSaveVideo;
+    else if (sender.tag == 22) key = kAXLPPanelSaveCover;
+    else if (sender.tag == 23) key = kAXLPPanelSaveAudio;
+    else if (sender.tag == 24) key = kAXLPPanelSaveImage;
+    else if (sender.tag == 25) key = kAXLPPanelSaveAllImages;
+    else if (sender.tag == 26) key = kAXLPPanelCopyText;
     if (!key) return;
     AXSet(key, @(sender.on));
     AXRefreshButton();
@@ -686,7 +700,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         [w bringSubviewToFront:axPanel];
 
         UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 20, width, 28)];
-        title.text = @"AwemeX 设置 V41";
+        title.text = @"AwemeX 设置 V43";
         title.textColor = UIColor.whiteColor;
         title.font = [UIFont boldSystemFontOfSize:18];
         title.textAlignment = NSTextAlignmentCenter;
@@ -723,7 +737,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         NSArray *switchKeys = @[kAXHideSearch, kAXHideRelatedArea, kAXShowButton];
         NSArray *switchDefs = @[@NO, @NO, @YES];
         for (NSInteger i = 0; i < (NSInteger)switchNames.count; i++) {
-            CGFloat y = 500 + i * 42;
+            CGFloat y = 488 + i * 36;
             UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(30, y, 230, 30)];
             l.text = switchNames[i];
             l.textColor = UIColor.whiteColor;
@@ -736,21 +750,32 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
             [axPanel addSubview:sw];
         }
 
-        UILabel *note = [[UILabel alloc] initWithFrame:CGRectMake(30, height - 94, width - 60, 40)];
-        note.text = @"V42：保持 v17 性能；相关搜索/合集改为模型+锚点容器隐藏。";
-        note.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.55];
-        note.font = [UIFont systemFontOfSize:11];
-        note.numberOfLines = 2;
-        [axPanel addSubview:note];
+        UILabel *lpTitle = [[UILabel alloc] initWithFrame:CGRectMake(30, 594, width - 60, 22)];
+        lpTitle.text = @"单指长按面板";
+        lpTitle.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.78];
+        lpTitle.font = [UIFont boldSystemFontOfSize:13];
+        [axPanel addSubview:lpTitle];
 
-        UIButton *done = [UIButton buttonWithType:UIButtonTypeSystem];
-        done.frame = CGRectMake(50, height - 48, width - 100, 34);
-        done.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.22];
-        done.layer.cornerRadius = 9;
-        [done setTitle:@"搞定收工" forState:UIControlStateNormal];
-        [done setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-        [done addTarget:self action:@selector(closeSettings) forControlEvents:UIControlEventTouchUpInside];
-        [axPanel addSubview:done];
+        NSArray *lpNames = @[@"保存视频", @"保存封面", @"保存音频", @"保存图片", @"保存所有图片", @"复制文案"];
+        NSArray *lpKeys = @[kAXLPPanelSaveVideo, kAXLPPanelSaveCover, kAXLPPanelSaveAudio, kAXLPPanelSaveImage, kAXLPPanelSaveAllImages, kAXLPPanelCopyText];
+        NSArray *lpDefs = @[@YES, @YES, @YES, @YES, @YES, @NO];
+        for (NSInteger i = 0; i < (NSInteger)lpNames.count; i++) {
+            NSInteger col = i % 2;
+            NSInteger row = i / 2;
+            CGFloat baseX = col == 0 ? 30.0 : width / 2.0 + 8.0;
+            CGFloat y = 617.0 + row * 32.0;
+            UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(baseX, y, col == 0 ? 96.0 : 104.0, 30.0)];
+            l.text = lpNames[i];
+            l.textColor = UIColor.whiteColor;
+            l.font = [UIFont boldSystemFontOfSize:12];
+            [axPanel addSubview:l];
+
+            UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(baseX + (col == 0 ? 98.0 : 108.0), y - 1.0, 52.0, 32.0)];
+            sw.tag = 21 + i;
+            sw.on = AXBool(lpKeys[i], [lpDefs[i] boolValue]);
+            [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
+            [axPanel addSubview:sw];
+        }
 
         AXResetTransformRecursive(axPanel);
         [w bringSubviewToFront:axPanel];
@@ -896,13 +921,12 @@ static void AXShow(void) {
 - (void)setCommonSearchAnchor:(id)anchor { if (AXShouldHideRelatedModel((id)self)) { %orig(nil); return; } %orig; }
 %end
 
-// AwemeX iPad 单指长按菜单：只追加保存按钮，不改菜单背景/布局
+// AwemeX iPad 单指长按菜单：按设置开关追加保存/复制按钮，不改菜单背景/布局
 // 用法：把本模块粘贴到现有 AwemeX_AlphaPro.xm 末尾，重新 make package。
-// 目标：在 AWEUserActionSheetView 的 actions 里追加：保存视频 / 保存封面 / 保存音频 / 保存图片。
+// 目标：在 AWEUserActionSheetView 的 actions 里追加：保存视频 / 保存封面 / 保存音频 / 保存图片 / 保存所有图片 / 复制文案；不加入生成视频。
 // 注意：这是安全测试模块，默认开启；如果按钮出现但保存失败，说明当前抖音版本的 awemeModel 字段名需要再适配。
 
 
-static NSString * const kAXAppendSaveButtons = @"ax_append_save_buttons";
 static char kAXSaveButtonsInjectedKey;
 
 static BOOL AXSB_Bool(NSString *key, BOOL def) {
@@ -1151,9 +1175,26 @@ static void AXSB_HandleSaveKind(NSString *kind) {
         AXSB_ShareAudioURL(AXSB_AudioURLFromAweme(aweme));
     } else if ([kind isEqualToString:@"image"]) {
         NSArray<NSURL *> *urls = AXSB_ImageURLsFromAweme(aweme);
+        NSURL *u = urls.count > 0 ? urls.firstObject : nil;
+        AXSB_SaveImageURL(u, @"图片");
+    } else if ([kind isEqualToString:@"image_all"]) {
+        NSArray<NSURL *> *urls = AXSB_ImageURLsFromAweme(aweme);
         if (urls.count == 0) { AXSB_Toast(@"图片链接为空"); return; }
         AXSB_Toast([NSString stringWithFormat:@"正在保存%lu张图片…", (unsigned long)urls.count]);
         for (NSURL *u in urls) AXSB_SaveImageURL(u, @"图片");
+    } else if ([kind isEqualToString:@"copy_text"]) {
+        NSString *desc = nil;
+        NSArray *sels = @[@"descriptionString", @"itemDescription", @"desc", @"text", @"title"];
+        for (NSString *name in sels) {
+            id value = AXSB_Send0(aweme, NSSelectorFromString(name));
+            if ([value isKindOfClass:NSString.class] && ((NSString *)value).length > 0) { desc = value; break; }
+        }
+        if (!desc && [aweme respondsToSelector:@selector(valueForKey:)]) {
+            @try { id value = [aweme valueForKey:@"descriptionString"]; if ([value isKindOfClass:NSString.class]) desc = value; } @catch (NSException *e) {}
+        }
+        if (desc.length == 0) { AXSB_Toast(@"文案为空"); return; }
+        UIPasteboard.generalPasteboard.string = desc;
+        AXSB_Toast(@"文案已复制");
     }
 }
 
@@ -1166,7 +1207,8 @@ static id AXSB_MakeAction(NSString *title, NSString *kind) {
     if (@available(iOS 13.0, *)) {
         NSString *sys = [kind isEqualToString:@"video"] ? @"arrow.down.circle" :
                         [kind isEqualToString:@"cover"] ? @"photo" :
-                        [kind isEqualToString:@"audio"] ? @"music.note" : @"photo.on.rectangle";
+                        [kind isEqualToString:@"audio"] ? @"music.note" :
+                        [kind isEqualToString:@"copy_text"] ? @"doc.on.doc" : @"photo.on.rectangle";
         img = [UIImage systemImageNamed:sys];
     }
 
@@ -1235,18 +1277,24 @@ static BOOL AXSB_IsLikelyVideoLongPressActions(NSArray *actions, id sheet) {
 }
 
 static NSArray *AXSB_ActionsByAppendingSaveButtons(NSArray *actions, id sheet) {
-    if (!AXSB_Bool(kAXAppendSaveButtons, YES)) return actions;
     if (![actions isKindOfClass:NSArray.class]) return actions;
     if (!AXSB_IsLikelyVideoLongPressActions(actions, sheet)) return actions;
 
     NSNumber *done = objc_getAssociatedObject(sheet, &kAXSaveButtonsInjectedKey);
     if (done.boolValue) return actions;
 
-    NSMutableArray *m = [actions mutableCopy];
-    NSArray *titles = @[@"保存视频", @"保存封面", @"保存音频", @"保存图片"];
-    NSArray *kinds = @[@"video", @"cover", @"audio", @"image"];
+    NSMutableArray *titles = [NSMutableArray array];
+    NSMutableArray *kinds = [NSMutableArray array];
+    if (AXSB_Bool(kAXLPPanelSaveVideo, YES)) { [titles addObject:@"保存视频"]; [kinds addObject:@"video"]; }
+    if (AXSB_Bool(kAXLPPanelSaveCover, YES)) { [titles addObject:@"保存封面"]; [kinds addObject:@"cover"]; }
+    if (AXSB_Bool(kAXLPPanelSaveAudio, YES)) { [titles addObject:@"保存音频"]; [kinds addObject:@"audio"]; }
+    if (AXSB_Bool(kAXLPPanelSaveImage, YES)) { [titles addObject:@"保存图片"]; [kinds addObject:@"image"]; }
+    if (AXSB_Bool(kAXLPPanelSaveAllImages, YES)) { [titles addObject:@"保存所有图片"]; [kinds addObject:@"image_all"]; }
+    if (AXSB_Bool(kAXLPPanelCopyText, NO)) { [titles addObject:@"复制文案"]; [kinds addObject:@"copy_text"]; }
+    if (titles.count == 0) return actions;
 
-    for (NSInteger i = 0; i < titles.count; i++) {
+    NSMutableArray *m = [actions mutableCopy];
+    for (NSInteger i = 0; i < (NSInteger)titles.count; i++) {
         BOOL exists = NO;
         for (id a in m) {
             NSString *t = AXSB_ActionTitle(a);
