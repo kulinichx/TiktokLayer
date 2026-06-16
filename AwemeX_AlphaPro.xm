@@ -1570,7 +1570,7 @@ static void AXInstallSingleLongPressForPlayVC(id playVC) {
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
     UIView *v = touch.view;
     while (v) {
-        if (AXIsInternalPanelView(v)) return NO;
+        if (AXIsAwemeXPanelView(v)) return NO;
         NSString *name = NSStringFromClass(v.class);
         if ([name containsString:@"Comment"] || [name containsString:@"Input"] || [name containsString:@"TextField"] || [name containsString:@"TextView"]) return NO;
         v = v.superview;
