@@ -51,8 +51,10 @@ static NSString * const kAXLPPanelSaveAudio = @"ax_lp_panel_save_audio";
 static NSString * const kAXLPPanelSaveImage = @"ax_lp_panel_save_image";
 static NSString * const kAXLPPanelSaveAllImages = @"ax_lp_panel_save_all_images";
 static NSString * const kAXLPPanelCopyText = @"ax_lp_panel_copy_text";
+static NSString * const kAXLPPanelCopyVideoLink = @"ax_lp_panel_copy_video_link";
 static NSString * const kAXLPPanelSettingsExpanded = @"ax_lp_panel_settings_expanded";
 static NSString * const kAXUISettingsExpanded = @"ax_ui_settings_expanded";
+static NSString * const kAXPanelLightMode = @"ax_panel_light_mode";
 
 static CGFloat AXFloat(NSString *key, CGFloat def) {
     id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
@@ -72,6 +74,52 @@ static void AXSetFast(NSString *key, id value) {
 static void AXSet(NSString *key, id value) {
     AXSetFast(key, value);
     [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+
+static BOOL AXUseLightPanel(void) {
+    return AXBool(kAXPanelLightMode, NO);
+}
+
+static UIColor *AXPanelBackgroundColor(void) {
+    return AXUseLightPanel() ? [[UIColor colorWithWhite:0.94 alpha:1.0] colorWithAlphaComponent:0.88] : [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.88];
+}
+
+static UIColor *AXPanelStrongBackgroundColor(void) {
+    return AXUseLightPanel() ? [[UIColor colorWithWhite:0.96 alpha:1.0] colorWithAlphaComponent:0.93] : [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.90];
+}
+
+static UIColor *AXPanelTextColor(void) {
+    return AXUseLightPanel() ? [UIColor colorWithWhite:0.10 alpha:1.0] : UIColor.whiteColor;
+}
+
+static UIColor *AXPanelSubTextColor(void) {
+    return AXUseLightPanel() ? [[UIColor colorWithWhite:0.22 alpha:1.0] colorWithAlphaComponent:0.72] : [[UIColor whiteColor] colorWithAlphaComponent:0.72];
+}
+
+static UIColor *AXPanelCardColor(void) {
+    return AXUseLightPanel() ? [[UIColor whiteColor] colorWithAlphaComponent:0.58] : [[UIColor whiteColor] colorWithAlphaComponent:0.065];
+}
+
+static UIColor *AXPanelButtonColor(void) {
+    return AXUseLightPanel() ? [[UIColor whiteColor] colorWithAlphaComponent:0.72] : [[UIColor whiteColor] colorWithAlphaComponent:0.075];
+}
+
+static UIColor *AXPanelSeparatorColor(void) {
+    return AXUseLightPanel() ? [[UIColor blackColor] colorWithAlphaComponent:0.10] : [[UIColor whiteColor] colorWithAlphaComponent:0.12];
+}
+
+static UIColor *AXPanelAccentColor(void) {
+    return [UIColor colorWithRed:0.34 green:0.68 blue:1.0 alpha:1.0];
+}
+
+static void AXApplySettingsChromeTheme(void) {
+    if (!axPanel) return;
+    axPanel.backgroundColor = AXPanelBackgroundColor();
+    UILabel *title = (UILabel *)[axPanel viewWithTag:43101];
+    if ([title isKindOfClass:UILabel.class]) title.textColor = AXPanelTextColor();
+    UIButton *close = (UIButton *)[axPanel viewWithTag:43102];
+    if ([close isKindOfClass:UIButton.class]) [close setTitleColor:AXPanelTextColor() forState:UIControlStateNormal];
 }
 
 static CGFloat AXClamp01(CGFloat v) {
@@ -596,13 +644,13 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
     UIView *host = axPanelContent ?: axPanel;
     UILabel *l = [[UILabel alloc] initWithFrame:frame];
     l.text = text;
-    l.textColor = UIColor.whiteColor;
+    l.textColor = AXPanelTextColor();
     l.font = [UIFont boldSystemFontOfSize:15];
     [host addSubview:l];
 
     UILabel *r = [[UILabel alloc] initWithFrame:CGRectMake(panelWidth - 110, frame.origin.y, 80, frame.size.height)];
     r.textAlignment = NSTextAlignmentRight;
-    r.textColor = UIColor.whiteColor;
+    r.textColor = AXPanelTextColor();
     r.font = [UIFont systemFontOfSize:14];
     r.text = [NSString stringWithFormat:@"%.0f%%", value * 100.0];
     [host addSubview:r];
@@ -665,20 +713,20 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     BOOL uiExpanded = AXBool(kAXUISettingsExpanded, NO);
     UIButton *uiHeader = [UIButton buttonWithType:UIButtonTypeCustom];
     uiHeader.frame = CGRectMake(24, y, width - 48, 46);
-    uiHeader.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.065];
+    uiHeader.backgroundColor = AXPanelCardColor();
     uiHeader.layer.cornerRadius = 13;
     [uiHeader addTarget:[AXMenuTarget shared] action:@selector(toggleUISettings) forControlEvents:UIControlEventTouchUpInside];
     [axPanelContent addSubview:uiHeader];
 
     UILabel *uiTitle = [[UILabel alloc] initWithFrame:CGRectMake(34, y + 9, width - 110, 28)];
     uiTitle.text = @"界面设置";
-    uiTitle.textColor = UIColor.whiteColor;
+    uiTitle.textColor = AXPanelTextColor();
     uiTitle.font = [UIFont boldSystemFontOfSize:16];
     [axPanelContent addSubview:uiTitle];
 
     UILabel *uiArrow = [[UILabel alloc] initWithFrame:CGRectMake(width - 58, y + 9, 28, 28)];
     uiArrow.text = uiExpanded ? @"⌃" : @"⌄";
-    uiArrow.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.86];
+    uiArrow.textColor = AXPanelSubTextColor();
     uiArrow.font = [UIFont boldSystemFontOfSize:18];
     uiArrow.textAlignment = NSTextAlignmentCenter;
     [axPanelContent addSubview:uiArrow];
@@ -704,13 +752,13 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
         y += 64.0;
         }
 
-        NSArray *switchNames = @[@"隐藏右上搜索", @"隐藏相关搜索/合集", @"显示 AX 悬浮按钮"];
-        NSArray *switchKeys = @[kAXHideSearch, kAXHideRelatedArea, kAXShowButton];
-        NSArray *switchDefs = @[@NO, @NO, @YES];
+        NSArray *switchNames = @[@"隐藏右上搜索", @"隐藏相关搜索/合集", @"显示 AX 悬浮按钮", @"浅色设置面板"];
+        NSArray *switchKeys = @[kAXHideSearch, kAXHideRelatedArea, kAXShowButton, kAXPanelLightMode];
+        NSArray *switchDefs = @[@NO, @NO, @YES, @NO];
         for (NSInteger i = 0; i < (NSInteger)switchNames.count; i++) {
         UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(30, y, width - 130, 34)];
         l.text = switchNames[i];
-        l.textColor = UIColor.whiteColor;
+        l.textColor = AXPanelTextColor();
         l.font = [UIFont boldSystemFontOfSize:15];
         [axPanelContent addSubview:l];
         UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(width - 88, y, 60, 32)];
@@ -726,33 +774,33 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     BOOL lpExpanded = AXBool(kAXLPPanelSettingsExpanded, NO);
     UIButton *lpHeader = [UIButton buttonWithType:UIButtonTypeCustom];
     lpHeader.frame = CGRectMake(24, y, width - 48, 46);
-    lpHeader.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.065];
+    lpHeader.backgroundColor = AXPanelCardColor();
     lpHeader.layer.cornerRadius = 13;
     [lpHeader addTarget:[AXMenuTarget shared] action:@selector(toggleLongPressPanelSettings) forControlEvents:UIControlEventTouchUpInside];
     [axPanelContent addSubview:lpHeader];
 
     UILabel *lpTitle = [[UILabel alloc] initWithFrame:CGRectMake(34, y + 9, width - 110, 28)];
     lpTitle.text = @"面板设置";
-    lpTitle.textColor = UIColor.whiteColor;
+    lpTitle.textColor = AXPanelTextColor();
     lpTitle.font = [UIFont boldSystemFontOfSize:16];
     [axPanelContent addSubview:lpTitle];
 
     UILabel *lpArrow = [[UILabel alloc] initWithFrame:CGRectMake(width - 58, y + 9, 28, 28)];
     lpArrow.text = lpExpanded ? @"⌃" : @"⌄";
-    lpArrow.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.86];
+    lpArrow.textColor = AXPanelSubTextColor();
     lpArrow.font = [UIFont boldSystemFontOfSize:18];
     lpArrow.textAlignment = NSTextAlignmentCenter;
     [axPanelContent addSubview:lpArrow];
     y += 56.0;
 
     if (lpExpanded) {
-        NSArray *lpNames = @[@"保存视频", @"保存封面", @"保存音频", @"保存图片", @"保存所有图片", @"复制文案"];
-        NSArray *lpKeys = @[kAXLPPanelSaveVideo, kAXLPPanelSaveCover, kAXLPPanelSaveAudio, kAXLPPanelSaveImage, kAXLPPanelSaveAllImages, kAXLPPanelCopyText];
-        NSArray *lpDefs = @[@YES, @YES, @YES, @YES, @YES, @NO];
+        NSArray *lpNames = @[@"保存视频", @"保存封面", @"保存音频", @"保存图片", @"保存所有图片", @"复制文案", @"复制视频链接"];
+        NSArray *lpKeys = @[kAXLPPanelSaveVideo, kAXLPPanelSaveCover, kAXLPPanelSaveAudio, kAXLPPanelSaveImage, kAXLPPanelSaveAllImages, kAXLPPanelCopyText, kAXLPPanelCopyVideoLink];
+        NSArray *lpDefs = @[@YES, @YES, @YES, @YES, @YES, @NO, @YES];
         for (NSInteger i = 0; i < (NSInteger)lpNames.count; i++) {
         UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(30, y, width - 130, 34.0)];
         l.text = lpNames[i];
-        l.textColor = UIColor.whiteColor;
+        l.textColor = AXPanelTextColor();
         l.font = [UIFont boldSystemFontOfSize:15];
         [axPanelContent addSubview:l];
 
@@ -768,7 +816,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     y += 8.0;
 
     UIView *aboutCard = [[UIView alloc] initWithFrame:CGRectMake(24, y, width - 48, 88)];
-    aboutCard.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.055];
+    aboutCard.backgroundColor = AXPanelCardColor();
     aboutCard.layer.cornerRadius = 13;
     aboutCard.clipsToBounds = YES;
     [axPanelContent addSubview:aboutCard];
@@ -781,19 +829,19 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
 
     UILabel *versionTitle = [[UILabel alloc] initWithFrame:CGRectMake(54, 8, width - 180, 32)];
     versionTitle.text = @"当前版本";
-    versionTitle.textColor = [UIColor colorWithRed:0.34 green:0.68 blue:1.0 alpha:1.0];
+    versionTitle.textColor = AXPanelAccentColor();
     versionTitle.font = [UIFont boldSystemFontOfSize:15];
     [aboutCard addSubview:versionTitle];
 
     UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
-    versionValue.text = @"V30";
-    versionValue.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.72];
+    versionValue.text = @"V31";
+    versionValue.textColor = AXPanelSubTextColor();
     versionValue.font = [UIFont boldSystemFontOfSize:14];
     versionValue.textAlignment = NSTextAlignmentRight;
     [aboutCard addSubview:versionValue];
 
     UIView *line = [[UIView alloc] initWithFrame:CGRectMake(54, 44, width - 126, 0.5)];
-    line.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.12];
+    line.backgroundColor = AXPanelSeparatorColor();
     [aboutCard addSubview:line];
 
     UIButton *logButton = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -809,13 +857,13 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
 
     UILabel *logTitle = [[UILabel alloc] initWithFrame:CGRectMake(54, 52, width - 170, 28)];
     logTitle.text = @"更新日志";
-    logTitle.textColor = [UIColor colorWithRed:0.34 green:0.68 blue:1.0 alpha:1.0];
+    logTitle.textColor = AXPanelAccentColor();
     logTitle.font = [UIFont boldSystemFontOfSize:15];
     [aboutCard addSubview:logTitle];
 
     UILabel *logArrow = [[UILabel alloc] initWithFrame:CGRectMake(width - 84, 52, 26, 28)];
     logArrow.text = @"›";
-    logArrow.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.45];
+    logArrow.textColor = AXPanelSubTextColor();
     logArrow.font = [UIFont boldSystemFontOfSize:24];
     logArrow.textAlignment = NSTextAlignmentRight;
     [aboutCard addSubview:logArrow];
@@ -876,14 +924,21 @@ static void AXReloadSettingsContent(BOOL animated) {
     if (sender.tag == 11) key = kAXHideSearch;
     else if (sender.tag == 12) key = kAXHideRelatedArea;
     else if (sender.tag == 13) key = kAXShowButton;
+    else if (sender.tag == 14) key = kAXPanelLightMode;
     else if (sender.tag == 21) key = kAXLPPanelSaveVideo;
     else if (sender.tag == 22) key = kAXLPPanelSaveCover;
     else if (sender.tag == 23) key = kAXLPPanelSaveAudio;
     else if (sender.tag == 24) key = kAXLPPanelSaveImage;
     else if (sender.tag == 25) key = kAXLPPanelSaveAllImages;
     else if (sender.tag == 26) key = kAXLPPanelCopyText;
+    else if (sender.tag == 27) key = kAXLPPanelCopyVideoLink;
     if (!key) return;
     AXSet(key, @(sender.on));
+    if (sender.tag == 14) {
+        AXApplySettingsChromeTheme();
+        AXReloadSettingsContent(NO);
+        return;
+    }
     AXRefreshButton();
     AXScheduleMainRefresh();
 }
@@ -924,7 +979,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         CGFloat panelH = MIN(540.0, b.size.height * 0.54);
         panelH = MAX(360.0, panelH);
         UIView *panel = [[UIView alloc] initWithFrame:CGRectMake((b.size.width - panelW) / 2.0, (b.size.height - panelH) / 2.0, panelW, panelH)];
-        panel.backgroundColor = [[UIColor colorWithWhite:0.96 alpha:1.0] colorWithAlphaComponent:0.92];
+        panel.backgroundColor = AXPanelStrongBackgroundColor();
         panel.layer.cornerRadius = 18;
         panel.clipsToBounds = YES;
         [overlay addSubview:panel];
@@ -949,7 +1004,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         [panel addSubview:close];
 
         UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(24, 58, panelW - 48, 24)];
-        sub.text = @"AwemeX for iPad · 当前版本 V30";
+        sub.text = @"AwemeX for iPad · 当前版本 V31";
         sub.textColor = [UIColor colorWithWhite:0.35 alpha:1.0];
         sub.font = [UIFont systemFontOfSize:13];
         [panel addSubview:sub];
@@ -963,7 +1018,12 @@ static void AXReloadSettingsContent(BOOL animated) {
         text.textContainerInset = UIEdgeInsetsMake(0, 0, 20, 0);
         text.font = [UIFont systemFontOfSize:14];
         text.textColor = [UIColor colorWithWhite:0.18 alpha:1.0];
-        text.text = @"V30（UI 收尾版）\n"
+        text.text = @"V31（面板校准版）\n"
+                    "· 面板设置新增复制视频链接开关。\n"
+                    "· 单指长按视频面板支持复制视频链接，便于排查保存失败源地址。\n"
+                    "· 增加浅色设置面板开关，深色为默认。\n"
+                    "· 保持已稳定的透明度、缩放、隐藏项、单指长按入口与上下滑性能逻辑。\n\n"
+                    "V30（UI 收尾版）\n"
                     "· 当前版本显示改为 AwemeX for iPad / V30。\n"
                     "· 更新日志改为正式弹窗，不再只用短提示。\n"
                     "· 保持已稳定的透明度、缩放、隐藏项、单指长按面板与上下滑性能逻辑。\n"
@@ -1004,7 +1064,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         CGFloat height = MIN(560.0, MAX(420.0, b.size.height * 0.58));
         axPanel = [[UIView alloc] initWithFrame:CGRectMake((b.size.width - width) / 2.0, (b.size.height - height) / 2.0, width, height)];
         axPanel.tag = 42029;
-        axPanel.backgroundColor = [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.88];
+        axPanel.backgroundColor = AXPanelBackgroundColor();
         axPanel.layer.cornerRadius = 20;
         axPanel.clipsToBounds = YES;
         axPanel.userInteractionEnabled = YES;
@@ -1014,16 +1074,18 @@ static void AXReloadSettingsContent(BOOL animated) {
         [w bringSubviewToFront:axPanel];
 
         UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 16, width, 30)];
+        title.tag = 43101;
         title.text = @"AwemeX for iPad";
-        title.textColor = UIColor.whiteColor;
+        title.textColor = AXPanelTextColor();
         title.font = [UIFont boldSystemFontOfSize:18];
         title.textAlignment = NSTextAlignmentCenter;
         [axPanel addSubview:title];
 
         UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+        close.tag = 43102;
         close.frame = CGRectMake(width - 52, 14, 36, 36);
         [close setTitle:@"×" forState:UIControlStateNormal];
-        [close setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+        [close setTitleColor:AXPanelTextColor() forState:UIControlStateNormal];
         close.titleLabel.font = [UIFont boldSystemFontOfSize:24];
         [close addTarget:self action:@selector(closeSettings) forControlEvents:UIControlEventTouchUpInside];
         [axPanel addSubview:close];
@@ -1038,6 +1100,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         [scroll addSubview:axPanelContent];
         axPanelScroll = scroll;
         AXBuildSettingsContent(scroll, width);
+        AXApplySettingsChromeTheme();
 
         AXResetTransformRecursive(axPanel);
         [w bringSubviewToFront:axPanel];
@@ -1491,7 +1554,7 @@ static void AXSB_ShowVideoSourcePanelForAweme(id aweme) {
     CGFloat contentH = 76.0 + sources.count * (rowH + 10.0) + 20.0;
     CGFloat panelH = MIN(contentH, b.size.height * 0.64);
     UIView *panel = [[UIView alloc] initWithFrame:CGRectMake((b.size.width - panelW) / 2.0, (b.size.height - panelH) / 2.0, panelW, panelH)];
-    panel.backgroundColor = [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.90];
+    panel.backgroundColor = AXPanelStrongBackgroundColor();
     panel.layer.cornerRadius = 22;
     panel.layer.masksToBounds = YES;
     [overlay addSubview:panel];
@@ -1499,14 +1562,14 @@ static void AXSB_ShowVideoSourcePanelForAweme(id aweme) {
 
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(24, 18, panelW - 90, 34)];
     title.text = @"选择视频源";
-    title.textColor = UIColor.whiteColor;
+    title.textColor = AXPanelTextColor();
     title.font = [UIFont boldSystemFontOfSize:20];
     [panel addSubview:title];
 
     UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
     close.frame = CGRectMake(panelW - 58, 16, 40, 40);
     [close setTitle:@"×" forState:UIControlStateNormal];
-    [close setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    [close setTitleColor:AXPanelTextColor() forState:UIControlStateNormal];
     close.titleLabel.font = [UIFont boldSystemFontOfSize:30];
     [close addTarget:[AXLongPressPanelTarget shared] action:@selector(closeLongPressPanel) forControlEvents:UIControlEventTouchUpInside];
     [panel addSubview:close];
@@ -1597,6 +1660,12 @@ static void AXSB_HandleSaveKind(NSString *kind) {
         if (urls.count == 0) { AXSB_Toast(@"图片链接为空"); return; }
         AXSB_Toast([NSString stringWithFormat:@"正在保存%lu张图片…", (unsigned long)urls.count]);
         for (NSURL *u in urls) AXSB_SaveImageURL(u, @"图片");
+     } else if ([kind isEqualToString:@"copy_video_link"]) {
+        NSArray<NSDictionary *> *sources = AXSB_VideoSourcesFromAweme(aweme);
+        NSURL *url = sources.count > 0 ? sources.firstObject[@"url"] : nil;
+        if (!url.absoluteString.length) { AXSB_Toast(@"视频链接为空"); return; }
+        UIPasteboard.generalPasteboard.string = url.absoluteString;
+        AXSB_Toast(@"视频链接已复制");
     } else if ([kind isEqualToString:@"copy_text"]) {
         NSString *desc = nil;
         NSArray *sels = @[@"descriptionString", @"itemDescription", @"desc", @"text", @"title"];
@@ -1651,6 +1720,9 @@ static NSArray<NSDictionary *> *AXSB_BuildLongPressItemsForAweme(id aweme) {
         if (AXSB_Bool(kAXLPPanelSaveAudio, YES)) {
             [items addObject:@{ @"title": @"保存音频", @"kind": @"audio" }];
         }
+        if (AXSB_Bool(kAXLPPanelCopyVideoLink, YES)) {
+            [items addObject:@{ @"title": @"复制视频链接", @"kind": @"copy_video_link" }];
+        }
     }
 
     if (AXSB_Bool(kAXLPPanelCopyText, NO)) {
@@ -1678,13 +1750,13 @@ static UIButton *AXSB_MakePanelButton(NSString *title, NSInteger tag, CGRect fra
     UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
     button.frame = frame;
     button.tag = tag;
-    button.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.075];
+    button.backgroundColor = AXPanelButtonColor();
     button.layer.cornerRadius = 14;
     button.clipsToBounds = YES;
     button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
     button.titleEdgeInsets = UIEdgeInsetsMake(0, 20, 0, 20);
     [button setTitle:title forState:UIControlStateNormal];
-    [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    [button setTitleColor:AXPanelTextColor() forState:UIControlStateNormal];
     button.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     return button;
 }
@@ -1728,7 +1800,7 @@ static void AXSB_ShowCustomLongPressPanelForAweme(id aweme, id playVC) {
     CGFloat contentH = 76.0 + items.count * (rowH + 12.0) + 70.0;
     CGFloat panelH = MIN(contentH, b.size.height * 0.72);
     UIView *panel = [[UIView alloc] initWithFrame:CGRectMake((b.size.width - panelW) / 2.0, (b.size.height - panelH) / 2.0, panelW, panelH)];
-    panel.backgroundColor = [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.90];
+    panel.backgroundColor = AXPanelStrongBackgroundColor();
     panel.layer.cornerRadius = 22;
     panel.layer.masksToBounds = YES;
     [overlay addSubview:panel];
@@ -1736,14 +1808,14 @@ static void AXSB_ShowCustomLongPressPanelForAweme(id aweme, id playVC) {
 
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(24, 18, panelW - 90, 34)];
     title.text = (AXSB_AwemeContentType(aweme) == 1) ? @"图片面板" : @"视频面板";
-    title.textColor = UIColor.whiteColor;
+    title.textColor = AXPanelTextColor();
     title.font = [UIFont boldSystemFontOfSize:20];
     [panel addSubview:title];
 
     UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
     close.frame = CGRectMake(panelW - 58, 16, 40, 40);
     [close setTitle:@"×" forState:UIControlStateNormal];
-    [close setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    [close setTitleColor:AXPanelTextColor() forState:UIControlStateNormal];
     close.titleLabel.font = [UIFont boldSystemFontOfSize:30];
     [close addTarget:[AXLongPressPanelTarget shared] action:@selector(closeLongPressPanel) forControlEvents:UIControlEventTouchUpInside];
     [panel addSubview:close];
