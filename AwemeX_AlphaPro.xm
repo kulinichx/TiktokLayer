@@ -137,7 +137,7 @@ static void TLDelayedApplyGlobalAlpha(id view) {
 - (void)layoutSubviews {
     %orig;
     if (!TLIsIpad()) return;
-    UIView *targetView = [self isKindOfClass:[UIView class]] ? (UIView *)self : nil;
+    UIView *targetView = [(id)self isKindOfClass:[UIView class]] ? (UIView *)(id)self : nil;
     if (targetView && [targetView.superview isKindOfClass:NSClassFromString(@"AWEPlayInteractionFollowPromptView")]) {
         TLLoadPrefsIfNeeded(NO);
         if (TLAvatarAlpha != TLInvalidAlpha) {
