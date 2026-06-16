@@ -1,537 +1,450 @@
 #import <UIKit/UIKit.h>
-#import <Foundation/Foundation.h>
-#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
-#pragma mark - Keys
+@interface AWEElementStackView : UIView
+@end
 
-static NSString * const kAXTopAlpha       = @"ax_top_alpha";
-static NSString * const kAXRightAlpha     = @"ax_right_alpha";
-static NSString * const kAXScale          = @"ax_scale";
-static NSString * const kAXIconAlpha      = @"ax_icon_alpha";
-static NSString * const kAXGlobalAlpha    = @"ax_global_alpha";
-static NSString * const kAXNicknameScale  = @"ax_nickname_scale";
-static NSString * const kAXHideSearch     = @"ax_hide_search";
-static NSString * const kAXShowButton     = @"ax_show_button";
+@interface IESLiveStackView : UIView
+@end
 
-static char kAXBaseAlphaKey;
-static char kAXTwoFingerGestureInstalledKey;
+@interface AWEPlayInteractionViewController : UIViewController
+@end
+
+static UIButton *axButton;
+static UIView *axPanel;
+static UIView *axofPanel = nil;
 static BOOL axApplyingElementEffects = NO;
 static UILongPressGestureRecognizer *axTwoFingerLongPressGesture = nil;
+static UIWindow *axTwoFingerLongPressWindow = nil;
 
-static const NSInteger kAXPanelTag = 77889931;
+static NSString * const kAXTopAlpha = @"ax_top_alpha";
+static NSString * const kAXRightAlpha = @"ax_right_alpha";
+static NSString * const kAXScale = @"ax_scale";
+static NSString * const kAXIconAlpha = @"ax_icon_alpha";
+static NSString * const kAXGlobalAlpha = @"ax_global_alpha";
+static NSString * const kAXNicknameScale = @"ax_nickname_scale";
+static NSString * const kAXHideSearch = @"ax_hide_search";
+static NSString * const kAXShowButton = @"ax_show_button";
+static NSString * const kAXOFNicknameDescAlpha = @"ax_nickname_desc_alpha";
+static NSString * const kAXOFRelatedSearchAlpha = @"ax_related_search_alpha";
+static void AXOF_RefreshAll(void);
 
-#pragma mark - Utilities
-
-static inline BOOL AXIsIpad(void) {
-    return [[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad;
+static CGFloat AXFloat(NSString *key, CGFloat def) {
+    id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    return v ? [v floatValue] : def;
 }
 
-static inline CGFloat AXClamp(CGFloat v, CGFloat min, CGFloat max) {
-    if (v < min) return min;
-    if (v > max) return max;
-    return v;
+static BOOL AXBool(NSString *key, BOOL def) {
+    id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    return v ? [v boolValue] : def;
 }
 
-static CGFloat AXFloatForKey(NSString *key, CGFloat fallback) {
-    id obj = [[NSUserDefaults standardUserDefaults] objectForKey:key];
-    if (!obj) return fallback;
-    if (![obj respondsToSelector:@selector(floatValue)]) return fallback;
-    return AXClamp([obj floatValue], 0.0, 1.5);
+static void AXSet(NSString *key, id value) {
+    [[NSUserDefaults standardUserDefaults] setObject:value forKey:key];
+    [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
-static BOOL AXBoolForKey(NSString *key, BOOL fallback) {
-    id obj = [[NSUserDefaults standardUserDefaults] objectForKey:key];
-    if (!obj) return fallback;
-    if (![obj respondsToSelector:@selector(boolValue)]) return fallback;
-    return [obj boolValue];
+static CGFloat AXClamp01(CGFloat v) {
+    return MIN(MAX(v, 0.0), 1.0);
 }
 
 static CGFloat AXGlobalAlpha(void) {
-    return AXClamp(AXFloatForKey(kAXGlobalAlpha, 1.0), 0.05, 1.0);
+    return AXClamp01(AXFloat(kAXGlobalAlpha, 1.0));
 }
 
-static CGFloat AXEffectiveAlpha(NSString *key, CGFloat fallback) {
-    CGFloat local = AXClamp(AXFloatForKey(key, fallback), 0.05, 1.0);
-    return AXClamp(local * AXGlobalAlpha(), 0.03, 1.0);
+static CGFloat AXEffectiveAlpha(NSString *key, CGFloat def) {
+    return AXClamp01(AXFloat(key, def) * AXGlobalAlpha());
 }
 
-static UIView *AXViewFromAny(id object) {
-    if (!object) return nil;
-    if (![(id)object isKindOfClass:[UIView class]]) return nil;
-    return (UIView *)(id)object;
+static char kAXBaseAlphaKey;
+static void AXApplyAlphaKeepingBase(UIView *v, CGFloat multiplier) {
+    if (!v) return;
+    NSNumber *stored = objc_getAssociatedObject(v, &kAXBaseAlphaKey);
+    CGFloat baseAlpha = stored ? stored.floatValue : v.alpha;
+    if (!stored) objc_setAssociatedObject(v, &kAXBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    CGFloat finalAlpha = AXClamp01(baseAlpha * multiplier);
+    if (fabs(v.alpha - finalAlpha) > 0.001) v.alpha = finalAlpha;
 }
 
-static NSString *AXClassName(id object) {
-    if (!object) return @"";
-    return NSStringFromClass([object class]);
-}
-
-static UIWindow *AXActiveWindow(void) {
-    UIWindow *result = nil;
-
+static UIWindow *AXKeyWindow(void) {
+    UIApplication *app = UIApplication.sharedApplication;
     if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-            if (scene.activationState != UISceneActivationStateForegroundActive &&
-                scene.activationState != UISceneActivationStateForegroundInactive) continue;
-
-            UIWindowScene *windowScene = (UIWindowScene *)scene;
-            for (UIWindow *window in windowScene.windows) {
-                if (window.isKeyWindow) return window;
-                if (!result && !window.hidden && window.alpha > 0.01) result = window;
+        for (UIScene *scene in app.connectedScenes) {
+            if (scene.activationState != UISceneActivationStateForegroundActive) continue;
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                if (w.isKeyWindow) return w;
             }
         }
     }
+    for (UIWindow *w in app.windows) if (w.isKeyWindow) return w;
+    return app.windows.firstObject;
+}
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    if (!result) {
-        for (UIWindow *window in [UIApplication sharedApplication].windows) {
-            if (window.isKeyWindow) return window;
-            if (!result && !window.hidden && window.alpha > 0.01) result = window;
-        }
+static BOOL AXIsDescendantOf(UIView *v, UIView *ancestor) {
+    if (!v || !ancestor) return NO;
+    UIView *cur = v;
+    while (cur) {
+        if (cur == ancestor) return YES;
+        cur = cur.superview;
     }
-#pragma clang diagnostic pop
+    return NO;
+}
 
-    return result;
+static BOOL AXIsAwemeXPanelView(UIView *v) {
+    return AXIsDescendantOf(v, axPanel) || AXIsDescendantOf(v, axButton) || AXIsDescendantOf(v, axofPanel);
+}
+
+static BOOL AXIsElementStackLike(UIView *v) {
+    if (!v) return NO;
+    Class aweStack = NSClassFromString(@"AWEElementStackView");
+    Class iesStack = NSClassFromString(@"IESLiveStackView");
+    if (aweStack && [v isKindOfClass:aweStack]) return YES;
+    if (iesStack && [v isKindOfClass:iesStack]) return YES;
+    NSString *cls = NSStringFromClass(v.class);
+    return [cls containsString:@"AWEElementStackView"] || [cls containsString:@"IESLiveStackView"];
+}
+
+static BOOL AXIsTopAreaView(UIView *v) {
+    if (!v || AXIsAwemeXPanelView(v) || !v.superview) return NO;
+    UIWindow *w = AXKeyWindow();
+    if (!w) return NO;
+    CGRect f = [v.superview convertRect:v.frame toView:w];
+    CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
+    CGFloat screenH = UIScreen.mainScreen.bounds.size.height;
+    if (CGRectIsEmpty(f) || f.size.width <= 0 || f.size.height <= 0) return NO;
+    // 顶部频道/推荐一栏：只处理顶部小控件，排除搜索框/状态栏/根容器。
+    if (f.origin.y < screenH * 0.02 || f.origin.y > screenH * 0.18) return NO;
+    if (f.size.width > screenW * 0.65 || f.size.height > 90.0) return NO;
+    if (f.origin.x > screenW * 0.72) return NO;
+    return YES;
+}
+
+static BOOL AXAncestorIsElementStackLike(UIView *v) {
+    UIView *cur = v.superview;
+    while (cur) {
+        if (AXIsElementStackLike(cur)) return YES;
+        cur = cur.superview;
+    }
+    return NO;
+}
+
+static BOOL AXIsOverlayLeafView(UIView *v) {
+    if (!v || AXIsAwemeXPanelView(v) || !v.superview) return NO;
+    if (AXAncestorIsElementStackLike(v)) return NO;
+    if (![v isKindOfClass:UILabel.class] && ![v isKindOfClass:UIButton.class] && ![v isKindOfClass:UIImageView.class]) return NO;
+    UIWindow *w = v.window ?: AXKeyWindow();
+    if (!w) return NO;
+    CGRect f = [v.superview convertRect:v.frame toView:w];
+    CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
+    CGFloat screenH = UIScreen.mainScreen.bounds.size.height;
+    if (CGRectIsEmpty(f) || f.size.width <= 0 || f.size.height <= 0) return NO;
+    if (f.size.width > screenW * 0.75 || f.size.height > 130.0) return NO;
+
+    // 顶部频道、左下昵称文案、底栏文字图标、右侧散落图标/文字。只处理叶子控件，避免影响视频画面和 Feed 滑动层。
+    if (AXIsTopAreaView(v)) return YES;
+    if (f.origin.y > screenH * 0.60) return YES;
+    if (f.origin.x < screenW * 0.26 && f.origin.y > screenH * 0.36) return YES;
+    if (f.origin.x > screenW * 0.72 && f.origin.y > screenH * 0.18) return YES;
+    return NO;
+}
+
+static void AXApplyOverlayLeafAlpha(UIView *v) {
+    if (!AXIsOverlayLeafView(v)) return;
+    CGFloat alpha = AXIsTopAreaView(v) ? AXEffectiveAlpha(kAXTopAlpha, 0.65) : AXGlobalAlpha();
+    AXApplyAlphaKeepingBase(v, alpha);
 }
 
 static UIViewController *AXFirstViewControllerFromView(UIView *view) {
     UIResponder *responder = view;
     while (responder) {
-        if ([responder isKindOfClass:[UIViewController class]]) return (UIViewController *)responder;
+        if ([responder isKindOfClass:UIViewController.class]) return (UIViewController *)responder;
         responder = responder.nextResponder;
     }
     return nil;
 }
 
-static BOOL AXIsDescendantOf(UIView *view, UIView *ancestor) {
-    if (!view || !ancestor) return NO;
-    UIView *v = view;
-    while (v) {
-        if (v == ancestor) return YES;
-        v = v.superview;
+static BOOL AXContainsSubviewOfClass(UIView *container, Class cls) {
+    if (!container || !cls) return NO;
+    for (UIView *sub in container.subviews) {
+        if ([sub isKindOfClass:cls]) return YES;
+        if (AXContainsSubviewOfClass(sub, cls)) return YES;
     }
     return NO;
 }
 
-static BOOL AXIsAwemeXPanelView(UIView *view) {
-    if (!view) return NO;
-    UIView *v = view;
-    while (v) {
-        if (v.tag == kAXPanelTag) return YES;
-        v = v.superview;
-    }
-    return NO;
-}
-
-static BOOL AXContainsSubviewOfClass(UIView *view, Class cls) {
-    if (!view || !cls) return NO;
-    for (UIView *subview in view.subviews) {
-        if ([subview isKindOfClass:cls]) return YES;
-        if (AXContainsSubviewOfClass(subview, cls)) return YES;
-    }
-    return NO;
-}
-
-static BOOL AXStackHasElementClassName(UIView *view, NSString *needle) {
-    if (!view || needle.length == 0) return NO;
-    if ([AXClassName(view) containsString:needle]) return YES;
-    for (UIView *subview in view.subviews) {
-        if (AXStackHasElementClassName(subview, needle)) return YES;
-    }
-    return NO;
-}
-
-static CGRect AXFrameInWindow(UIView *view) {
-    if (!view || !view.window) return CGRectZero;
-    return [view convertRect:view.bounds toView:view.window];
-}
-
-static BOOL AXIsElementStackLike(UIView *view) {
-    if (!view) return NO;
-    NSString *name = AXClassName(view);
-    if ([name containsString:@"ElementStackView"]) return YES;
-    if ([name containsString:@"IESLiveStackView"]) return YES;
-    if ([view respondsToSelector:@selector(arrangedSubviews)]) return YES;
-    return NO;
-}
-
-static BOOL AXIsRightStack(UIView *view) {
-    if (!view || !view.window) return NO;
-    CGRect f = AXFrameInWindow(view);
-    CGFloat w = CGRectGetWidth(view.window.bounds);
-    if (w <= 0 || CGRectIsEmpty(f)) return NO;
-
-    if (CGRectGetMidX(f) > w * 0.62) return YES;
-    if (AXStackHasElementClassName(view, @"UserAvatar")) return YES;
-    if (AXStackHasElementClassName(view, @"Interaction") && CGRectGetMidX(f) > w * 0.52) return YES;
-    return NO;
-}
-
-static BOOL AXIsLeftStack(UIView *view) {
-    if (!view || !view.window) return NO;
-    CGRect f = AXFrameInWindow(view);
-    CGFloat w = CGRectGetWidth(view.window.bounds);
-    CGFloat h = CGRectGetHeight(view.window.bounds);
-    if (w <= 0 || h <= 0 || CGRectIsEmpty(f)) return NO;
-
-    if (CGRectGetMidX(f) < w * 0.56 && CGRectGetMidY(f) > h * 0.42) return YES;
-    if (AXStackHasElementClassName(view, @"DescriptionElement")) return YES;
-    if (AXStackHasElementClassName(view, @"FeedAnchorContainerView")) return YES;
-    return NO;
-}
-
-static BOOL AXIsTopAreaView(UIView *view) {
-    if (!view || !view.window) return NO;
-    CGRect f = AXFrameInWindow(view);
-    CGFloat h = CGRectGetHeight(view.window.bounds);
-    if (h <= 0 || CGRectIsEmpty(f)) return NO;
-    if (CGRectGetMinY(f) < 130.0 && CGRectGetHeight(f) < 180.0) return YES;
-    return NO;
-}
-
-static BOOL AXIsOverlayLeafView(UIView *view) {
-    if (!view || AXIsAwemeXPanelView(view)) return NO;
-    if ([view isKindOfClass:[UILabel class]]) return YES;
-    if ([view isKindOfClass:[UIButton class]]) return YES;
-    if ([view isKindOfClass:[UIImageView class]]) return YES;
-    return NO;
-}
-
-static BOOL AXAncestorIsElementStackLike(UIView *view) {
-    UIView *v = view.superview;
-    while (v) {
-        if (AXIsElementStackLike(v)) return YES;
-        v = v.superview;
-    }
-    return NO;
-}
-
-static void AXApplyAlphaKeepingBase(UIView *view, CGFloat targetAlpha) {
-    if (!view || AXIsAwemeXPanelView(view)) return;
-
-    CGFloat cleanTarget = AXClamp(targetAlpha, 0.0, 1.0);
-    NSNumber *stored = objc_getAssociatedObject(view, &kAXBaseAlphaKey);
-    CGFloat baseAlpha = stored ? [stored floatValue] : view.alpha;
-
-    // When the host app resets a view to fully visible, update the base so old values do not poison reused cells.
-    if (!axApplyingElementEffects && view.alpha > 0.95 && (!stored || fabs([stored floatValue] - view.alpha) > 0.02)) {
-        baseAlpha = view.alpha;
-        objc_setAssociatedObject(view, &kAXBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    } else if (!stored) {
-        objc_setAssociatedObject(view, &kAXBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-
-    CGFloat finalAlpha = AXClamp(baseAlpha * cleanTarget, 0.0, 1.0);
-    if (fabs(view.alpha - finalAlpha) > 0.005) {
-        axApplyingElementEffects = YES;
-        view.alpha = finalAlpha;
-        axApplyingElementEffects = NO;
-    }
-}
-
-static CGAffineTransform AXRightStackTargetTransform(UIView *view) {
-    CGFloat scale = AXClamp(AXFloatForKey(kAXScale, 1.0), 0.50, 1.50);
-    return CGAffineTransformMakeScale(scale, scale);
-}
-
-static CGAffineTransform AXLeftStackTargetTransform(UIView *view) {
-    CGFloat scale = AXClamp(AXFloatForKey(kAXNicknameScale, 1.0), 0.50, 1.50);
-    return CGAffineTransformMakeScale(scale, scale);
-}
-
-static void AXApplySearchEntranceHide(UIView *view) {
-    if (!view || AXIsAwemeXPanelView(view)) return;
-    BOOL hide = AXBoolForKey(kAXHideSearch, NO);
-    view.hidden = hide;
-    AXApplyAlphaKeepingBase(view, hide ? 0.0 : AXGlobalAlpha());
-}
-
-static void AXApplyOverlayLeafAlpha(UIView *view) {
-    if (!AXIsOverlayLeafView(view)) return;
-    if (AXAncestorIsElementStackLike(view)) return;
-    if (!view.window) return;
-
-    CGFloat target = AXGlobalAlpha();
-    CGRect f = AXFrameInWindow(view);
-    CGFloat w = CGRectGetWidth(view.window.bounds);
-    CGFloat h = CGRectGetHeight(view.window.bounds);
-
-    if (w > 0 && h > 0) {
-        if (CGRectGetMidY(f) < 130.0) {
-            target = AXEffectiveAlpha(kAXTopAlpha, 1.0);
-        } else if (CGRectGetMidX(f) > w * 0.62) {
-            target = AXEffectiveAlpha(kAXRightAlpha, 1.0);
-        } else if (CGRectGetMidX(f) < w * 0.58 && CGRectGetMidY(f) > h * 0.42) {
-            // 左下角昵称/文案区域只吃全局透明，不再二次套右侧栏/头像透明。
-            target = AXGlobalAlpha();
+static BOOL AXStackHasElementClassName(UIView *container, NSString *targetName) {
+    if (!container || targetName.length == 0) return NO;
+    NSArray *subviews = [container.subviews copy];
+    for (NSInteger i = (NSInteger)subviews.count - 1; i >= 0; i--) {
+        UIView *sub = subviews[i];
+        if ([sub respondsToSelector:@selector(elementClassName)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            NSString *name = [sub performSelector:@selector(elementClassName)];
+#pragma clang diagnostic pop
+            if ([name isEqualToString:targetName]) return YES;
         }
+        if (AXStackHasElementClassName(sub, targetName)) return YES;
     }
-
-    AXApplyAlphaKeepingBase(view, target);
+    return NO;
 }
 
-static void AXApplyElementEffects(id object) {
-    UIView *view = AXViewFromAny(object);
-    if (!view || AXIsAwemeXPanelView(view)) return;
 
-    CGFloat targetAlpha = AXGlobalAlpha();
+static BOOL AXIsLooseRightAreaStack(UIView *v) {
+    if (!v || AXIsAwemeXPanelView(v) || !v.superview) return NO;
+    if ([v isKindOfClass:UIScrollView.class]) return NO;
+    UIWindow *w = v.window ?: AXKeyWindow();
+    if (!w) return NO;
+    CGRect f = [v.superview convertRect:v.frame toView:w];
+    CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
+    CGFloat screenH = UIScreen.mainScreen.bounds.size.height;
+    if (CGRectIsEmpty(f) || f.size.width <= 0 || f.size.height <= 0) return NO;
 
-    if (AXIsTopAreaView(view)) {
-        targetAlpha = AXEffectiveAlpha(kAXTopAlpha, 1.0);
+    // DYYY 的 iPad 版主要靠 AWEElementStackView 本体缩放。部分 iPad 版本
+    // 右侧栏拿不到 VC/label/avatar 特征，所以这里保留坐标兜底；但只允许
+    // “右侧窄高按钮栏”，排除顶部推荐栏和 Feed 滑动大容器。
+    if (f.origin.x < screenW * 0.55) return NO;
+    if (f.origin.y < screenH * 0.22) return NO;
+    if (f.size.width > MIN(screenW * 0.34, 260.0)) return NO;
+    if (f.size.height < 90.0 || f.size.height > screenH * 0.82) return NO;
+    if (v.subviews.count < 2) return NO;
+    return YES;
+}
+
+static BOOL AXIsSafeRightAreaStack(UIView *v) {
+    if (!v || AXIsAwemeXPanelView(v) || !v.superview) return NO;
+    if ([v isKindOfClass:UIScrollView.class]) return NO;
+    UIWindow *w = AXKeyWindow();
+    if (!w) return NO;
+    CGRect f = [v.superview convertRect:v.frame toView:w];
+    CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
+    CGFloat screenH = UIScreen.mainScreen.bounds.size.height;
+    if (CGRectIsEmpty(f) || f.size.width <= 0 || f.size.height <= 0) return NO;
+    // 只允许右侧窄按钮栏：避免再次误伤 Feed 上下滑动容器。
+    if (f.origin.x < screenW * 0.68) return NO;
+    if (f.origin.y < screenH * 0.18) return NO;
+    if (f.size.width > screenW * 0.28) return NO;
+    if (f.size.height < 80.0 || f.size.height > screenH * 0.78) return NO;
+    if (v.subviews.count < 2) return NO;
+    return YES;
+}
+
+static BOOL AXIsRightStack(UIView *v) {
+    if (!AXIsElementStackLike(v)) return NO;
+    if (AXIsAwemeXPanelView(v)) return NO;
+
+    NSString *label = v.accessibilityLabel ?: @"";
+    BOOL hasAvatar = AXContainsSubviewOfClass(v, NSClassFromString(@"AWEPlayInteractionUserAvatarView"));
+    BOOL hasUserAvatarElement = AXStackHasElementClassName(v, @"AWEPlayInteractionUserAvatarOptElementElement");
+
+    // 先认 DYYY 同款特征。
+    if ([label isEqualToString:@"right"] || hasAvatar || hasUserAvatarElement) {
+        return YES;
     }
 
-    if (AXIsRightStack(view)) {
-        targetAlpha = AXEffectiveAlpha(kAXRightAlpha, 1.0);
-        view.layer.anchorPoint = CGPointMake(1.0, 0.5);
-        view.transform = AXRightStackTargetTransform(view);
-    } else if (AXIsLeftStack(view)) {
-        // 左下角昵称/文案区域：保留全局透明，缩放单独处理，避免透明度重复相乘。
-        targetAlpha = AXGlobalAlpha();
-        view.layer.anchorPoint = CGPointMake(0.0, 0.5);
-        view.transform = AXLeftStackTargetTransform(view);
+    // iPad 上部分版本取不到 AWEPlayInteractionViewController，label 也可能为空。
+    // fixed13 能生效就是靠坐标兜底；这里恢复兜底，但不再恢复会卡上下滑的
+    // VC 页面级重刷 / setFrame / setBounds 钩子。
+    if (AXIsLooseRightAreaStack(v)) return YES;
+
+    UIViewController *vc = AXFirstViewControllerFromView(v);
+    NSString *vcName = vc ? NSStringFromClass(vc.class) : @"";
+    BOOL inPlayVC = [vcName containsString:@"AWEPlayInteractionViewController"] ||
+                    [vcName containsString:@"AWELiveNewPreStreamViewController"];
+
+    return inPlayVC && AXIsSafeRightAreaStack(v);
+}
+
+static BOOL AXIsLooseLeftAreaStack(UIView *v) {
+    if (!v || AXIsAwemeXPanelView(v) || !v.superview) return NO;
+    if ([v isKindOfClass:UIScrollView.class]) return NO;
+    UIWindow *w = v.window ?: AXKeyWindow();
+    if (!w) return NO;
+    CGRect f = [v.superview convertRect:v.frame toView:w];
+    CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
+    CGFloat screenH = UIScreen.mainScreen.bounds.size.height;
+    if (CGRectIsEmpty(f) || f.size.width <= 0 || f.size.height <= 0) return NO;
+    if (f.origin.x > screenW * 0.58) return NO;
+    if (f.origin.y < screenH * 0.45) return NO;
+    if (f.size.width > screenW * 0.75 || f.size.height > screenH * 0.45) return NO;
+    if (v.subviews.count < 1) return NO;
+    return YES;
+}
+
+static BOOL AXIsLeftStack(UIView *v) {
+    if (!AXIsElementStackLike(v)) return NO;
+    if (AXIsAwemeXPanelView(v)) return NO;
+
+    NSString *label = v.accessibilityLabel ?: @"";
+    BOOL hasAnchor = AXContainsSubviewOfClass(v, NSClassFromString(@"AWEFeedAnchorContainerView"));
+    BOOL hasDescElement = AXStackHasElementClassName(v, @"AWEPlayInteractionDescriptionElement");
+    if ([label isEqualToString:@"left"] || hasAnchor || hasDescElement) return YES;
+
+    return AXIsLooseLeftAreaStack(v);
+}
+
+static BOOL AXIsTopStack(UIView *v) {
+    if (!AXIsElementStackLike(v)) return NO;
+    if (AXIsAwemeXPanelView(v)) return NO;
+    NSString *label = v.accessibilityLabel ?: @"";
+    if ([label isEqualToString:@"top"] || [label isEqualToString:@"center"]) return YES;
+    return AXIsTopAreaView(v);
+}
+
+static CGAffineTransform AXRightStackTargetTransform(UIView *v) {
+    CGFloat scale = AXFloat(kAXScale, 0.81);
+    if (scale <= 0 || fabs(scale - 1.0) <= 0.001) return CGAffineTransformIdentity;
+
+    NSArray *subviews = [v.subviews copy];
+    CGFloat ty = 0;
+    for (UIView *view in subviews) {
+        CGFloat viewHeight = view.frame.size.height;
+        ty += (viewHeight - viewHeight * scale) / 2;
+    }
+    CGFloat frameWidth = v.frame.size.width;
+    CGFloat rightTX = (frameWidth - frameWidth * scale) / 2;
+    return CGAffineTransformMake(scale, 0, 0, scale, rightTX, ty);
+}
+
+static CGAffineTransform AXLeftStackTargetTransform(UIView *v) {
+    CGFloat scale = AXFloat(kAXNicknameScale, 1.0);
+    if (scale <= 0 || fabs(scale - 1.0) <= 0.001) return CGAffineTransformIdentity;
+
+    NSArray *subviews = [v.subviews copy];
+    CGFloat ty = 0;
+    for (UIView *view in subviews) {
+        CGFloat viewHeight = view.frame.size.height;
+        ty += (viewHeight - viewHeight * scale) / 2;
+    }
+    CGFloat frameWidth = v.frame.size.width;
+    CGFloat leftTX = (frameWidth - frameWidth * scale) / 2 - frameWidth * (1 - scale);
+    CGAffineTransform t = CGAffineTransformMakeScale(scale, scale);
+    return CGAffineTransformTranslate(t, leftTX / scale, ty / scale);
+}
+
+static void AXApplyElementEffects(UIView *v) {
+    if (!v || AXIsAwemeXPanelView(v)) return;
+    if (axApplyingElementEffects) return;
+
+    axApplyingElementEffects = YES;
+
+    if (AXIsRightStack(v)) {
+        CGFloat alpha = AXEffectiveAlpha(kAXRightAlpha, 0.80);
+        CGAffineTransform t = AXRightStackTargetTransform(v);
+
+        // DYYY iPad 同款：直接作用在 AWEElementStackView 本体。
+        // 之前缩放会被系统后续 setTransform(identity) 覆盖；V20 会在 setTransform 里守护。
+        if (!CGAffineTransformEqualToTransform(v.transform, t)) v.transform = t;
+        AXApplyAlphaKeepingBase(v, alpha);
+        axApplyingElementEffects = NO;
+        return;
     }
 
-    if (AXStackHasElementClassName(view, @"UserAvatar") || AXStackHasElementClassName(view, @"Avatar")) {
-        targetAlpha = AXEffectiveAlpha(kAXIconAlpha, 1.0);
+    if (AXIsLeftStack(v)) {
+        CGAffineTransform t = AXLeftStackTargetTransform(v);
+        if (!CGAffineTransformEqualToTransform(v.transform, t)) v.transform = t;
+        AXApplyAlphaKeepingBase(v, AXGlobalAlpha());
+        axApplyingElementEffects = NO;
+        return;
     }
 
-    AXApplyAlphaKeepingBase(view, targetAlpha);
+    if (AXIsTopStack(v)) {
+        CGFloat alpha = AXEffectiveAlpha(kAXTopAlpha, 0.65);
+        AXApplyAlphaKeepingBase(v, alpha);
+    }
 
-    for (UIView *subview in view.subviews) {
-        AXApplyOverlayLeafAlpha(subview);
+    axApplyingElementEffects = NO;
+}
+
+
+static void AXRefreshButton(void) {
+    if (!axButton) return;
+    axButton.hidden = !AXBool(kAXShowButton, YES);
+    axButton.alpha = AXFloat(kAXIconAlpha, 0.34);
+    axButton.userInteractionEnabled = YES;
+    axButton.enabled = YES;
+    axButton.layer.zPosition = CGFLOAT_MAX;
+    UIWindow *w = AXKeyWindow();
+    if (w && axButton.superview == w) [w bringSubviewToFront:axButton];
+}
+
+
+
+
+static void AXApplySearchEntranceHide(UIView *v) {
+    if (!v || AXIsAwemeXPanelView(v)) return;
+    BOOL shouldHide = AXBool(kAXHideSearch, YES);
+    if (shouldHide) {
+        objc_setAssociatedObject(v, @selector(AXApplySearchEntranceHide), @(YES), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        v.hidden = YES;
+        v.alpha = 0.0;
+        v.userInteractionEnabled = NO;
+    } else {
+        NSNumber *marked = objc_getAssociatedObject(v, @selector(AXApplySearchEntranceHide));
+        if (marked.boolValue) {
+            v.hidden = NO;
+            v.alpha = 1.0;
+            v.userInteractionEnabled = YES;
+        }
     }
 }
 
 static void AXApplyToSubviews(UIView *view) {
-    if (!view || AXIsAwemeXPanelView(view)) return;
-    AXApplyElementEffects(view);
-    AXApplyOverlayLeafAlpha(view);
-    for (UIView *subview in view.subviews) {
-        AXApplyToSubviews(subview);
+    if (!view) return;
+    if (AXIsElementStackLike(view)) {
+        AXApplyElementEffects(view);
+    } else {
+        AXApplyOverlayLeafAlpha(view);
     }
+    for (UIView *sub in view.subviews) AXApplyToSubviews(sub);
 }
 
-#pragma mark - Settings Panel
+static void AXRefreshAllStacks(void) {
+    UIApplication *app = UIApplication.sharedApplication;
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in app.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                AXApplyToSubviews(w);
+            }
+        }
+        return;
+    }
+    for (UIWindow *w in app.windows) AXApplyToSubviews(w);
+}
+
+static void AXResetTransformRecursive(UIView *view) {
+    if (!view) return;
+    view.transform = CGAffineTransformIdentity;
+    view.layer.anchorPoint = CGPointMake(0.5, 0.5);
+    for (UIView *sub in view.subviews) AXResetTransformRecursive(sub);
+}
+
+static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat panelWidth) {
+    UILabel *l = [[UILabel alloc] initWithFrame:frame];
+    l.text = text;
+    l.textColor = UIColor.whiteColor;
+    l.font = [UIFont boldSystemFontOfSize:15];
+    [axPanel addSubview:l];
+    UILabel *r = [[UILabel alloc] initWithFrame:CGRectMake(panelWidth - 110, frame.origin.y, 80, frame.size.height)];
+    r.textAlignment = NSTextAlignmentRight;
+    r.textColor = UIColor.whiteColor;
+    r.font = [UIFont systemFontOfSize:14];
+    r.text = [NSString stringWithFormat:@"%.0f%%", value * 100.0];
+    [axPanel addSubview:r];
+    return r;
+}
 
 @interface AXMenuTarget : NSObject
 + (instancetype)shared;
 - (void)openSettings;
 - (void)closeSettings;
 - (void)resetSettings;
-- (void)sliderChanged:(UISlider *)slider;
+- (void)sliderChanged:(UISlider *)sender;
 - (void)switchChanged:(UISwitch *)sender;
 @end
-
-static UILabel *AXLabel(NSString *text, CGRect frame, CGFloat size, BOOL bold) {
-    UILabel *label = [[UILabel alloc] initWithFrame:frame];
-    label.text = text;
-    label.textColor = [UIColor whiteColor];
-    label.font = bold ? [UIFont boldSystemFontOfSize:size] : [UIFont systemFontOfSize:size];
-    label.numberOfLines = 1;
-    return label;
-}
-
-static UISlider *AXSlider(UIView *panel, NSString *title, NSString *key, NSInteger tag, CGFloat y, CGFloat minValue, CGFloat maxValue, CGFloat fallback) {
-    UILabel *name = AXLabel(title, CGRectMake(18, y, 170, 28), 14, NO);
-    [panel addSubview:name];
-
-    CGFloat value = AXFloatForKey(key, fallback);
-    value = AXClamp(value, minValue, maxValue);
-
-    UILabel *valueLabel = AXLabel([NSString stringWithFormat:@"%.0f%%", value * 100.0], CGRectMake(CGRectGetWidth(panel.bounds) - 70, y, 52, 28), 13, NO);
-    valueLabel.textAlignment = NSTextAlignmentRight;
-    valueLabel.tag = tag + 10000;
-    [panel addSubview:valueLabel];
-
-    UISlider *slider = [[UISlider alloc] initWithFrame:CGRectMake(18, y + 30, CGRectGetWidth(panel.bounds) - 36, 28)];
-    slider.minimumValue = minValue;
-    slider.maximumValue = maxValue;
-    slider.value = value;
-    slider.tag = tag;
-    [slider addTarget:[AXMenuTarget shared] action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
-    [panel addSubview:slider];
-    return slider;
-}
-
-static UISwitch *AXSwitch(UIView *panel, NSString *title, NSString *key, NSInteger tag, CGFloat y, BOOL fallback) {
-    UILabel *name = AXLabel(title, CGRectMake(18, y, 220, 34), 14, NO);
-    [panel addSubview:name];
-
-    UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(CGRectGetWidth(panel.bounds) - 68, y, 52, 34)];
-    sw.tag = tag;
-    sw.on = AXBoolForKey(key, fallback);
-    [sw addTarget:[AXMenuTarget shared] action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
-    [panel addSubview:sw];
-    return sw;
-}
-
-@implementation AXMenuTarget
-
-+ (instancetype)shared {
-    static AXMenuTarget *target = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        target = [AXMenuTarget new];
-    });
-    return target;
-}
-
-- (NSString *)keyForSliderTag:(NSInteger)tag {
-    switch (tag) {
-        case 1001: return kAXTopAlpha;
-        case 1002: return kAXRightAlpha;
-        case 1003: return kAXScale;
-        case 1004: return kAXIconAlpha;
-        case 1005: return kAXGlobalAlpha;
-        case 1006: return kAXNicknameScale;
-        default: return nil;
-    }
-}
-
-- (NSString *)keyForSwitchTag:(NSInteger)tag {
-    switch (tag) {
-        case 2001: return kAXHideSearch;
-        case 2002: return kAXShowButton;
-        default: return nil;
-    }
-}
-
-- (UILabel *)valueLabelForControl:(UIControl *)control {
-    UIView *panel = control.superview;
-    while (panel && panel.tag != kAXPanelTag) panel = panel.superview;
-    UIView *label = [panel viewWithTag:control.tag + 10000];
-    return [label isKindOfClass:[UILabel class]] ? (UILabel *)label : nil;
-}
-
-- (void)closeSettings {
-    UIWindow *window = AXActiveWindow();
-    UIView *old = [window viewWithTag:kAXPanelTag];
-    [old removeFromSuperview];
-}
-
-- (void)resetSettings {
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    [defaults setObject:@1.0 forKey:kAXTopAlpha];
-    [defaults setObject:@1.0 forKey:kAXRightAlpha];
-    [defaults setObject:@1.0 forKey:kAXScale];
-    [defaults setObject:@1.0 forKey:kAXIconAlpha];
-    [defaults setObject:@1.0 forKey:kAXGlobalAlpha];
-    [defaults setObject:@1.0 forKey:kAXNicknameScale];
-    [defaults setObject:@NO forKey:kAXHideSearch];
-    [defaults setObject:@YES forKey:kAXShowButton];
-    [defaults synchronize];
-
-    UIWindow *window = AXActiveWindow();
-    if (window) AXApplyToSubviews(window);
-
-    [self closeSettings];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [[AXMenuTarget shared] openSettings];
-    });
-}
-
-- (void)sliderChanged:(UISlider *)slider {
-    NSString *key = [self keyForSliderTag:slider.tag];
-    if (!key) return;
-
-    CGFloat value = AXClamp(slider.value, slider.minimumValue, slider.maximumValue);
-    [[NSUserDefaults standardUserDefaults] setObject:@(value) forKey:key];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-
-    UILabel *valueLabel = [self valueLabelForControl:slider];
-    if (valueLabel) {
-        valueLabel.text = [NSString stringWithFormat:@"%.0f%%", value * 100.0];
-    }
-
-    UIWindow *window = AXActiveWindow();
-    if (window) AXApplyToSubviews(window);
-}
-
-- (void)switchChanged:(UISwitch *)sender {
-    NSString *key = [self keyForSwitchTag:sender.tag];
-    if (!key) return;
-
-    [[NSUserDefaults standardUserDefaults] setObject:@(sender.isOn) forKey:key];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-
-    UIWindow *window = AXActiveWindow();
-    if (window) AXApplyToSubviews(window);
-}
-
-
-- (void)openSettings {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *window = AXActiveWindow();
-        if (!window) return;
-
-        UIView *old = [window viewWithTag:kAXPanelTag];
-        if (old) {
-            [old removeFromSuperview];
-            return;
-        }
-
-        CGRect bounds = window.bounds;
-        UIView *container = [[UIView alloc] initWithFrame:bounds];
-        container.tag = kAXPanelTag;
-        container.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.35];
-        container.userInteractionEnabled = YES;
-        container.layer.zPosition = 999999;
-
-        CGFloat panelWidth = MIN(430.0, CGRectGetWidth(bounds) - 48.0);
-        CGFloat panelHeight = MIN(560.0, CGRectGetHeight(bounds) - 80.0);
-        UIView *panel = [[UIView alloc] initWithFrame:CGRectMake((CGRectGetWidth(bounds) - panelWidth) / 2.0,
-                                                                 (CGRectGetHeight(bounds) - panelHeight) / 2.0,
-                                                                 panelWidth,
-                                                                 panelHeight)];
-        panel.backgroundColor = [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.94];
-        panel.layer.cornerRadius = 18.0;
-        panel.clipsToBounds = YES;
-        [container addSubview:panel];
-
-        UILabel *title = AXLabel(@"AwemeX iPad 设置", CGRectMake(18, 14, panelWidth - 36, 34), 19, YES);
-        title.textAlignment = NSTextAlignmentCenter;
-        [panel addSubview:title];
-
-        CGFloat y = 58.0;
-        AXSlider(panel, @"顶栏透明", kAXTopAlpha, 1001, y, 0.05, 1.0, 1.0); y += 70.0;
-        AXSlider(panel, @"右侧栏透明", kAXRightAlpha, 1002, y, 0.05, 1.0, 1.0); y += 70.0;
-        AXSlider(panel, @"右侧栏缩放", kAXScale, 1003, y, 0.50, 1.50, 1.0); y += 70.0;
-        AXSlider(panel, @"头像透明", kAXIconAlpha, 1004, y, 0.05, 1.0, 1.0); y += 70.0;
-        AXSlider(panel, @"全局透明", kAXGlobalAlpha, 1005, y, 0.05, 1.0, 1.0); y += 70.0;
-        AXSlider(panel, @"昵称文案缩放", kAXNicknameScale, 1006, y, 0.50, 1.50, 1.0); y += 72.0;
-
-        AXSwitch(panel, @"隐藏搜索入口", kAXHideSearch, 2001, y, NO); y += 44.0;
-        AXSwitch(panel, @"显示按钮区域", kAXShowButton, 2002, y, YES); y += 52.0;
-
-        UIButton *reset = [UIButton buttonWithType:UIButtonTypeSystem];
-        reset.frame = CGRectMake(18, panelHeight - 54, (panelWidth - 54) / 2.0, 38);
-        [reset setTitle:@"重置" forState:UIControlStateNormal];
-        [reset setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        reset.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.14];
-        reset.layer.cornerRadius = 10.0;
-        [reset addTarget:[AXMenuTarget shared] action:@selector(resetSettings) forControlEvents:UIControlEventTouchUpInside];
-        [panel addSubview:reset];
-
-        UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-        close.frame = CGRectMake(CGRectGetMaxX(reset.frame) + 18, panelHeight - 54, (panelWidth - 54) / 2.0, 38);
-        [close setTitle:@"关闭" forState:UIControlStateNormal];
-        [close setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        close.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.14];
-        close.layer.cornerRadius = 10.0;
-        [close addTarget:[AXMenuTarget shared] action:@selector(closeSettings) forControlEvents:UIControlEventTouchUpInside];
-        [panel addSubview:close];
-
-        [window addSubview:container];
-        [window bringSubviewToFront:container];
-    });
-}
-
-@end
-
-#pragma mark - Two Finger Long Press
 
 @interface AXTwoFingerLongPressTarget : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
@@ -539,134 +452,783 @@ static UISwitch *AXSwitch(UIView *panel, NSString *title, NSString *key, NSInteg
 @end
 
 @implementation AXTwoFingerLongPressTarget
-
 + (instancetype)shared {
-    static AXTwoFingerLongPressTarget *target = nil;
+    static AXTwoFingerLongPressTarget *target;
     static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        target = [AXTwoFingerLongPressTarget new];
-    });
+    dispatch_once(&onceToken, ^{ target = [AXTwoFingerLongPressTarget new]; });
     return target;
 }
 
 - (void)handleTwoFingerLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
+
     dispatch_async(dispatch_get_main_queue(), ^{
         [[AXMenuTarget shared] openSettings];
     });
 }
 
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
-    return YES;
-}
-
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
-    UIView *view = touch.view;
-    if (AXIsAwemeXPanelView(view)) return YES;
+    UIView *touchedView = touch.view;
+
+    // 不抢 AwemeX 自己面板/悬浮按钮里的触摸，避免拖动 slider、点按钮时被双指长按识别。
+    if (AXIsDescendantOf(touchedView, axPanel) || AXIsDescendantOf(touchedView, axButton)) return NO;
+
     return YES;
 }
 
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+        shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    // 允许与抖音 Feed 的上下滑、右侧按钮区域原有手势同时存在；配合 cancelsTouchesInView=NO，避免影响 fixed18。
+    return YES;
+}
+@end
+
+@implementation AXMenuTarget
++ (instancetype)shared {
+    static AXMenuTarget *target;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ target = [AXMenuTarget new]; });
+    return target;
+}
+
+- (void)closeSettings { [axPanel removeFromSuperview]; axPanel = nil; AXRefreshButton(); }
+
+- (void)resetSettings {
+    AXSet(kAXGlobalAlpha, @1.00); AXSet(kAXTopAlpha, @0.65); AXSet(kAXRightAlpha, @0.80); AXSet(kAXScale, @0.81);
+    AXSet(kAXIconAlpha, @0.34); AXSet(kAXNicknameScale, @1.00); AXSet(kAXOFNicknameDescAlpha, @1.00); AXSet(kAXOFRelatedSearchAlpha, @0.55); AXSet(kAXHideSearch, @YES); AXSet(kAXShowButton, @YES);
+    [self closeSettings];
+    AXRefreshAllStacks();
+}
+
+- (void)sliderChanged:(UISlider *)sender {
+    NSArray *keys = @[@"", kAXGlobalAlpha, kAXTopAlpha, kAXRightAlpha, kAXScale, kAXIconAlpha, kAXNicknameScale, kAXOFNicknameDescAlpha, kAXOFRelatedSearchAlpha];
+    if (sender.tag <= 0 || sender.tag >= keys.count) return;
+    NSString *key = keys[sender.tag];
+    AXSet(key, @(sender.value));
+    UILabel *label = [axPanel viewWithTag:8000 + sender.tag];
+    label.text = [NSString stringWithFormat:@"%.0f%%", sender.value * 100.0];
+    AXRefreshButton();
+    AXRefreshAllStacks();
+    if (sender.tag == 7 || sender.tag == 8) AXOF_RefreshAll();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ AXRefreshAllStacks(); AXOF_RefreshAll(); });
+}
+
+
+- (void)switchChanged:(UISwitch *)sender {
+    AXSet(sender.tag == 11 ? kAXHideSearch : kAXShowButton, @(sender.on));
+    AXRefreshButton();
+    AXRefreshAllStacks();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ AXRefreshAllStacks(); });
+}
+
+- (void)openSettings {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *w = AXKeyWindow();
+        if (!w) return;
+        if (axPanel) { [self closeSettings]; return; }
+
+        CGRect b = UIScreen.mainScreen.bounds;
+        CGFloat width = MIN(390.0, b.size.width - 90.0);
+        CGFloat height = MIN(760.0, b.size.height - 50.0);
+        axPanel = [[UIView alloc] initWithFrame:CGRectMake((b.size.width - width) / 2.0, (b.size.height - height) / 2.0, width, height)];
+        axPanel.tag = 42029;
+        axPanel.backgroundColor = [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.86];
+        axPanel.layer.cornerRadius = 20;
+        axPanel.clipsToBounds = YES;
+        axPanel.userInteractionEnabled = YES;
+        axPanel.exclusiveTouch = YES;
+        axPanel.layer.zPosition = CGFLOAT_MAX;
+        [w addSubview:axPanel];
+        [w bringSubviewToFront:axPanel];
+
+        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 20, width, 28)];
+        title.text = @"AwemeX 设置 V33";
+        title.textColor = UIColor.whiteColor;
+        title.font = [UIFont boldSystemFontOfSize:18];
+        title.textAlignment = NSTextAlignmentCenter;
+        [axPanel addSubview:title];
+
+        UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+        close.frame = CGRectMake(width - 50, 18, 34, 34);
+        [close setTitle:@"×" forState:UIControlStateNormal];
+        [close setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+        close.titleLabel.font = [UIFont boldSystemFontOfSize:23];
+        [close addTarget:self action:@selector(closeSettings) forControlEvents:UIControlEventTouchUpInside];
+        [axPanel addSubview:close];
+
+        NSArray *names = @[@"设置全局透明", @"顶部不透明度", @"右侧按钮不透明度", @"右侧按钮缩放比例", @"AX 图标不透明度", @"昵称文案缩放", @"昵称/文案不透明度", @"相关搜索不透明度"];
+        NSArray *keys = @[kAXGlobalAlpha, kAXTopAlpha, kAXRightAlpha, kAXScale, kAXIconAlpha, kAXNicknameScale, kAXOFNicknameDescAlpha, kAXOFRelatedSearchAlpha];
+        NSArray *defs = @[@1.00, @0.65, @0.80, @0.81, @0.34, @1.00, @1.00, @0.55];
+        for (NSInteger i = 0; i < 8; i++) {
+            CGFloat y = 62 + i * 61;
+            UILabel *val = AXLabel(names[i], AXFloat(keys[i], [defs[i] floatValue]), CGRectMake(30, y, 230, 24), width);
+            val.tag = 8000 + i + 1;
+            UISlider *s = [[UISlider alloc] initWithFrame:CGRectMake(30, y + 32, width - 60, 30)];
+            s.tag = i + 1;
+            BOOL isScaleSlider = (i == 3 || i == 5);
+            s.minimumValue = isScaleSlider ? 0.50 : 0.05;
+            s.maximumValue = isScaleSlider ? 1.30 : 1.00;
+            s.value = AXFloat(keys[i], [defs[i] floatValue]);
+            [s addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
+            [axPanel addSubview:s];
+        }
+
+        NSArray *switchNames = @[@"隐藏右上搜索", @"显示 AX 悬浮按钮"];
+        for (NSInteger i = 0; i < 2; i++) {
+            CGFloat y = 574 + i * 42;
+            UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(30, y, 230, 30)];
+            l.text = switchNames[i];
+            l.textColor = UIColor.whiteColor;
+            l.font = [UIFont boldSystemFontOfSize:15];
+            [axPanel addSubview:l];
+            UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(width - 85, y, 60, 32)];
+            sw.tag = i == 0 ? 11 : 12;
+            sw.on = AXBool(i == 0 ? kAXHideSearch : kAXShowButton, YES);
+            [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
+            [axPanel addSubview:sw];
+        }
+
+        UILabel *note = [[UILabel alloc] initWithFrame:CGRectMake(30, height - 98, width - 60, 22)];
+        note.text = @"V36：增强中部文案、相关搜索/合集图标与标题跟随透明；保持弹层排除。";
+        note.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.50];
+        note.font = [UIFont systemFontOfSize:11];
+        note.numberOfLines = 1;
+        [axPanel addSubview:note];
+
+        UIButton *reset = [UIButton buttonWithType:UIButtonTypeSystem];
+        reset.frame = CGRectMake(50, height - 62, width - 100, 36);
+        reset.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.22];
+        reset.layer.cornerRadius = 9;
+        [reset setTitle:@"搞定收工" forState:UIControlStateNormal];
+        [reset setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+        [reset addTarget:self action:@selector(closeSettings) forControlEvents:UIControlEventTouchUpInside];
+        [axPanel addSubview:reset];
+
+        AXResetTransformRecursive(axPanel);
+        [w bringSubviewToFront:axPanel];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ AXRefreshAllStacks(); });
+    });
+}
 @end
 
 static void AXInstallTwoFingerLongPressGesture(void) {
+    UIWindow *w = AXKeyWindow();
+    if (!w) return;
+
+    // Window 可能在启动/切前后台后变化；只在当前 keyWindow 上保留一个手势。
+    if (axTwoFingerLongPressGesture && axTwoFingerLongPressWindow == w) {
+        if (![w.gestureRecognizers containsObject:axTwoFingerLongPressGesture]) {
+            [w addGestureRecognizer:axTwoFingerLongPressGesture];
+        }
+        return;
+    }
+
+    if (axTwoFingerLongPressGesture && axTwoFingerLongPressWindow) {
+        [axTwoFingerLongPressWindow removeGestureRecognizer:axTwoFingerLongPressGesture];
+    }
+
+    AXTwoFingerLongPressTarget *target = [AXTwoFingerLongPressTarget shared];
+    axTwoFingerLongPressGesture = [[UILongPressGestureRecognizer alloc] initWithTarget:target
+                                                                                action:@selector(handleTwoFingerLongPress:)];
+    axTwoFingerLongPressGesture.delegate = target;
+    axTwoFingerLongPressGesture.numberOfTouchesRequired = 2;
+    axTwoFingerLongPressGesture.minimumPressDuration = 0.75;
+
+    // 核心：不取消、不延迟系统原有触摸，避免影响 fixed18 已修好的上下滑和右侧按钮缩放。
+    axTwoFingerLongPressGesture.cancelsTouchesInView = NO;
+    axTwoFingerLongPressGesture.delaysTouchesBegan = NO;
+    axTwoFingerLongPressGesture.delaysTouchesEnded = NO;
+
+    [w addGestureRecognizer:axTwoFingerLongPressGesture];
+    axTwoFingerLongPressWindow = w;
+}
+
+static void AXShow(void) {
+    UIWindow *w = AXKeyWindow();
+    if (!w) return;
+    if (axButton) {
+        if (axButton.superview != w) [w addSubview:axButton];
+        AXRefreshButton();
+        AXInstallTwoFingerLongPressGesture();
+        return;
+    }
+    axButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    axButton.frame = CGRectMake(20, 200, 54, 54);
+    axButton.layer.cornerRadius = 27;
+    axButton.clipsToBounds = YES;
+    axButton.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.70];
+    [axButton setTitle:@"AX" forState:UIControlStateNormal];
+    [axButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    axButton.titleLabel.font = [UIFont systemFontOfSize:18 weight:UIFontWeightMedium];
+    axButton.userInteractionEnabled = YES;
+    axButton.enabled = YES;
+    axButton.layer.zPosition = CGFLOAT_MAX;
+    [axButton addTarget:[AXMenuTarget shared] action:@selector(openSettings) forControlEvents:UIControlEventTouchUpInside];
+    [w addSubview:axButton];
+    AXRefreshButton();
+    AXInstallTwoFingerLongPressGesture();
+}
+
+// AwemeX V25 Overlay Opacity Controls Module
+// 作用：给“昵称/文案区域”和“相关搜索条”单独增加透明度控制。
+// 用法：作为独立 .xm 加进现有 AwemeX 工程编译，不要直接替换 fixed18/V23 主文件。
+// 默认值：昵称文案 100%，相关搜索 55%。
+
+
+static char kAXOFBaseAlphaKey;
+static char kAXOFRelatedContainerKey;
+static char kAXOFTargetKindKey; // 1 = nickname/desc, 2 = related search
+static BOOL axofApplyingAlpha = NO;
+static CGFloat AXOF_Clamp(CGFloat v) { return MIN(MAX(v, 0.0), 1.0); }
+
+static CGFloat AXOF_Float(NSString *key, CGFloat def) {
+    id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    return v ? [v floatValue] : def;
+}
+
+static void AXOF_Set(NSString *key, id value) {
+    [[NSUserDefaults standardUserDefaults] setObject:value forKey:key];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+static UIWindow *AXOF_KeyWindow(void) {
+    UIApplication *app = UIApplication.sharedApplication;
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in app.connectedScenes) {
+            if (scene.activationState != UISceneActivationStateForegroundActive) continue;
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                if (w.isKeyWindow) return w;
+            }
+        }
+    }
+    for (UIWindow *w in app.windows) if (w.isKeyWindow) return w;
+    return app.windows.firstObject;
+}
+
+static CGRect AXOF_WindowFrame(UIView *v) {
+    if (!v || !v.superview) return CGRectZero;
+    UIWindow *w = v.window ?: AXOF_KeyWindow();
+    return [v.superview convertRect:v.frame toView:w];
+}
+
+static NSString *AXOF_ViewText(UIView *v) {
+    if ([v isKindOfClass:UILabel.class]) return ((UILabel *)v).text ?: @"";
+    if ([v isKindOfClass:UIButton.class]) return [((UIButton *)v) titleForState:UIControlStateNormal] ?: @"";
+    if ([v respondsToSelector:@selector(text)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        id t = [v performSelector:@selector(text)];
+#pragma clang diagnostic pop
+        if ([t isKindOfClass:NSString.class] && ((NSString *)t).length > 0) return t;
+    }
+    NSString *acc = v.accessibilityLabel ?: @"";
+    return acc;
+}
+
+
+static BOOL AXOF_TextContainsAny(NSString *text, NSArray *needles) {
+    if (text.length == 0) return NO;
+    for (NSString *needle in needles) {
+        if (needle.length > 0 && [text containsString:needle]) return YES;
+    }
+    return NO;
+}
+
+static BOOL AXOF_SubtreeContainsAnyText(UIView *root, NSArray *needles, NSInteger depth) {
+    if (!root || depth > 7) return NO;
+    if (AXOF_TextContainsAny(AXOF_ViewText(root), needles)) return YES;
+    for (UIView *sub in root.subviews) {
+        if (AXOF_SubtreeContainsAnyText(sub, needles, depth + 1)) return YES;
+    }
+    return NO;
+}
+
+static BOOL AXOF_IsCommentOrShareOverlayContext(UIView *v) {
+    if (!v) return NO;
+    CGSize s = UIScreen.mainScreen.bounds.size;
+    NSArray *commentNeedles = @[@"条评论", @"全部评论", @"发评论", @"写评论", @"分享你此刻的想法", @"回复", @"展开1条回复"];
+    NSArray *shareNeedles = @[@"分享给朋友", @"分享到", @"复制链接", @"私信给朋友", @"保存至相册"];
+    UIView *cur = v;
+    NSInteger depth = 0;
+    while (cur && depth < 9) {
+        CGRect f = AXOF_WindowFrame(cur);
+        NSString *txt = AXOF_ViewText(cur);
+        if (AXOF_TextContainsAny(txt, commentNeedles) || AXOF_TextContainsAny(txt, shareNeedles)) return YES;
+        BOOL largeOverlay = !CGRectIsEmpty(f) && f.size.width > s.width * 0.72 && f.size.height > s.height * 0.38;
+        BOOL sideOrFullPanel = largeOverlay && f.origin.x < s.width * 0.45;
+        if (sideOrFullPanel && (AXOF_SubtreeContainsAnyText(cur, commentNeedles, 0) || AXOF_SubtreeContainsAnyText(cur, shareNeedles, 0))) return YES;
+        cur = cur.superview;
+        depth++;
+    }
+    return NO;
+}
+
+static BOOL AXOF_IsSafeRelatedContainerFrame(UIView *container) {
+    if (!container) return NO;
+    CGSize s = UIScreen.mainScreen.bounds.size;
+    CGRect f = AXOF_WindowFrame(container);
+    if (CGRectIsEmpty(f)) return NO;
+    return f.origin.x < s.width * 0.18 &&
+           f.origin.y > s.height * 0.12 && f.origin.y < s.height * 0.84 &&
+           f.size.width > s.width * 0.28 && f.size.width < s.width * 0.96 &&
+           f.size.height >= 20.0 && f.size.height <= 118.0;
+}
+
+static BOOL AXOF_IsAwemeXOwnView(UIView *v) {
+    if (!v) return NO;
+    // V36：继续强排 AwemeX 自身面板与评论/分享/输入/键盘/弹层；
+    // 同时用“条评论/输入框/分享”等文字特征识别 iPad 评论页，避免昵称/文案透明度误伤评论列表。
+    if (AXOF_IsCommentOrShareOverlayContext(v)) return YES;
+    UIView *cur = v;
+    while (cur) {
+        if (cur == axPanel || cur == axButton || cur == axofPanel) return YES;
+        if (cur.tag == 42029 || cur.tag == 42030) return YES;
+        NSString *cn = NSStringFromClass(cur.class);
+        NSArray *deny = @[@"AXOF", @"AXMenu", @"AwemeX", @"Settings", @"Setting", @"Comment", @"Share", @"ActionSheet", @"Input", @"Keyboard", @"Popup", @"Alert", @"Dialog", @"Toast", @"HalfScreen", @"Popover", @"Reply", @"TextInput"];
+        for (NSString *d in deny) {
+            if ([cn containsString:d]) return YES;
+        }
+        cur = cur.superview;
+    }
+    UIResponder *r = v;
+    while (r) {
+        NSString *name = NSStringFromClass(r.class);
+        NSArray *deny = @[@"AXOF", @"AXMenu", @"AwemeX", @"Settings", @"Setting", @"Comment", @"Share", @"ActionSheet", @"Input", @"Keyboard", @"Popup", @"Alert", @"Dialog", @"Toast", @"HalfScreen", @"Popover", @"Reply", @"TextInput"];
+        for (NSString *d in deny) {
+            if ([name containsString:d]) return YES;
+        }
+        if ([r isKindOfClass:UILabel.class]) {
+            NSString *t = ((UILabel *)r).text ?: @"";
+            if ([t containsString:@"AwemeX 设置"] || [t containsString:@"文案 / 相关搜索"] || [t containsString:@"透明度"] || [t containsString:@"不透明度"]) return YES;
+        }
+        r = r.nextResponder;
+    }
+    return NO;
+}
+
+
+static BOOL AXOF_HasMarkedRelatedSearchAncestor(UIView *v) {
+    UIView *cur = v;
+    while (cur) {
+        NSNumber *marked = objc_getAssociatedObject(cur, &kAXOFRelatedContainerKey);
+        if (marked.boolValue) return YES;
+        cur = cur.superview;
+    }
+    return NO;
+}
+
+static UIView *AXOF_FindRelatedSearchContainer(UIView *v) {
+    if (!v) return nil;
+    CGSize s = UIScreen.mainScreen.bounds.size;
+    UIView *cur = v;
+    UIView *best = v;
+    NSInteger depth = 0;
+    while (cur && depth < 7) {
+        CGRect f = AXOF_WindowFrame(cur);
+        if (!CGRectIsEmpty(f) && f.origin.y > s.height * 0.12 && f.origin.y < s.height * 0.84 &&
+            f.origin.x < s.width * 0.25 && f.size.width > s.width * 0.35 &&
+            f.size.height > 22.0 && f.size.height < 120.0) {
+            best = cur;
+        }
+        cur = cur.superview;
+        depth++;
+    }
+    return best;
+}
+
+static BOOL AXOF_IsRelatedSearchView(UIView *v) {
+    if (!v || !v.superview || AXOF_IsAwemeXOwnView(v)) return NO;
+    if (AXOF_HasMarkedRelatedSearchAncestor(v)) return YES;
+    NSString *cls = NSStringFromClass(v.class);
+    NSString *txt = AXOF_ViewText(v);
+    NSString *lowerCls = cls.lowercaseString;
+    if ([txt containsString:@"相关搜索"] || [txt containsString:@"相关视频"] || [txt containsString:@"合集"] ||
+        ([txt containsString:@"搜索"] && txt.length <= 48)) return YES;
+    if ([lowerCls containsString:@"relatedsearch"] || [lowerCls containsString:@"relationsearch"] ||
+        [lowerCls containsString:@"searchentrance"] || [lowerCls containsString:@"searchbar"] ||
+        [lowerCls containsString:@"searchhint"] || [lowerCls containsString:@"feedsearch"] ||
+        [lowerCls containsString:@"mix"] || [lowerCls containsString:@"collection"] ||
+        [lowerCls containsString:@"magnifier"] || [lowerCls containsString:@"aggregate"] ||
+        [lowerCls containsString:@"series"] || [lowerCls containsString:@"playlist"]) return YES;
+
+    CGRect f = AXOF_WindowFrame(v);
+    CGSize s = UIScreen.mainScreen.bounds.size;
+    if (CGRectIsEmpty(f) || f.size.width <= 0 || f.size.height <= 0) return NO;
+    BOOL inStripY = f.origin.y > s.height * 0.12 && f.origin.y < s.height * 0.84;
+    BOOL leafLike = [v isKindOfClass:UILabel.class] || [v isKindOfClass:UIButton.class] || [v isKindOfClass:UIImageView.class] ||
+                    [lowerCls containsString:@"label"] || [lowerCls containsString:@"text"] || [lowerCls containsString:@"icon"] ||
+                    [lowerCls containsString:@"image"] || [lowerCls containsString:@"glyph"];
+    if (!leafLike) return NO;
+    BOOL stripText = inStripY && f.origin.x < s.width * 0.46 && f.size.width > 16.0 &&
+                     f.size.width < s.width * 0.78 && f.size.height < 96.0 &&
+                     (txt.length > 0 && ([txt containsString:@"搜索"] || [txt containsString:@"合集"] || [txt containsString:@"相关"] || [txt containsString:@"视频"]));
+    // V36：放大镜/合集图标有时无文字，只靠同一横条位置与尺寸识别。
+    BOOL stripIcon = inStripY && f.origin.x < s.width * 0.22 && f.size.width <= 86.0 && f.size.height <= 86.0;
+    return stripText || stripIcon;
+}
+
+static BOOL AXOF_IsNicknameDescView(UIView *v) {
+    if (!v || !v.superview || AXOF_IsAwemeXOwnView(v)) return NO;
+    if (AXOF_IsRelatedSearchView(v)) return NO;
+
+    NSString *cls = NSStringFromClass(v.class);
+    NSString *lowerCls = cls.lowercaseString;
+    NSString *txt = AXOF_ViewText(v);
+    CGRect f = AXOF_WindowFrame(v);
+    CGSize s = UIScreen.mainScreen.bounds.size;
+    if (CGRectIsEmpty(f) || f.size.width <= 0 || f.size.height <= 0) return NO;
+
+    BOOL textLikeLeaf = [v isKindOfClass:UILabel.class] || [v isKindOfClass:UIButton.class] ||
+                        [lowerCls containsString:@"label"] || [lowerCls containsString:@"text"] ||
+                        [lowerCls containsString:@"desc"] || [lowerCls containsString:@"caption"] ||
+                        [lowerCls containsString:@"attributed"] || [lowerCls containsString:@"rich"] ||
+                        [lowerCls containsString:@"yylabel"] || [lowerCls containsString:@"ttt"] ||
+                        [lowerCls containsString:@"nickname"] || [lowerCls containsString:@"author"] ||
+                        [lowerCls containsString:@"feedanchor"] || [lowerCls containsString:@"playinteraction"];
+    if (!textLikeLeaf) return NO;
+
+    BOOL feedTextArea = f.origin.x < s.width * 0.84 &&
+                        f.origin.y > s.height * 0.06 && f.origin.y < s.height * 0.82 &&
+                        f.size.width < s.width * 0.94 && f.size.height < 168.0;
+    if (!feedTextArea) return NO;
+
+    if ([cls containsString:@"Nick"] || [cls containsString:@"Author"] || [cls containsString:@"Desc"] ||
+        [cls containsString:@"Caption"] || [cls containsString:@"TitleLabel"] || [cls containsString:@"FeedAnchor"] ||
+        [lowerCls containsString:@"nickname"] || [lowerCls containsString:@"author"] || [lowerCls containsString:@"description"] ||
+        [lowerCls containsString:@"caption"] || [lowerCls containsString:@"aweme"] || [lowerCls containsString:@"playinteraction"]) return YES;
+
+    if (txt.length == 0) return NO;
+    if ([txt hasPrefix:@"@"] || [txt containsString:@"#"] || [txt containsString:@"IP属地"] ||
+        [txt containsString:@"作者声明"] || [txt containsString:@"虚构演绎"] || [txt containsString:@"展开"] ||
+        [txt containsString:@"收起"] || [txt containsString:@"原声"] || [txt containsString:@"音乐"]) return YES;
+
+    // V36：覆盖部分 iPad 中部文案：类名不明显但能取到文字，位置在 feed 文案区，且不是右侧按钮/弹层。
+    BOOL looksLikeFeedCaptionText = txt.length >= 2 && txt.length <= 220 &&
+                                    f.origin.x < s.width * 0.72 && f.size.height <= 156.0;
+    return looksLikeFeedCaptionText;
+}
+
+static CGFloat AXOF_BaseAlphaForView(UIView *v) {
+    if (!v) return 1.0;
+
+    // 优先使用主透明模块记录的原始 alpha。
+    // 这样“设置全局透明”和“昵称/文案不透明度”不会互相把对方的结果当成新基准，
+    // 避免左下角昵称文案在滑动、切视频、刷新 layout 后重复变暗或突然恢复。
+    NSNumber *mainBase = objc_getAssociatedObject(v, &kAXBaseAlphaKey);
+    if (mainBase) return mainBase.floatValue;
+
+    NSNumber *ofBase = objc_getAssociatedObject(v, &kAXOFBaseAlphaKey);
+    if (ofBase) return ofBase.floatValue;
+
+    CGFloat baseAlpha = v.alpha;
+    objc_setAssociatedObject(v, &kAXOFBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return baseAlpha;
+}
+
+static void AXOF_ApplyAlphaKind(UIView *v, CGFloat alpha, NSInteger kind) {
+    if (!v || AXOF_IsAwemeXOwnView(v)) return;
+    alpha = AXOF_Clamp(alpha);
+    objc_setAssociatedObject(v, &kAXOFTargetKindKey, @(kind), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    CGFloat baseAlpha = AXOF_BaseAlphaForView(v);
+    CGFloat finalAlpha = AXOF_Clamp(baseAlpha * AXGlobalAlpha() * alpha);
+    if (fabs(v.alpha - finalAlpha) > 0.001) {
+        axofApplyingAlpha = YES;
+        v.alpha = finalAlpha;
+        axofApplyingAlpha = NO;
+    }
+}
+
+static void AXOF_ReapplyMarkedView(UIView *v) {
+    if (!v || AXOF_IsAwemeXOwnView(v)) return;
+    NSNumber *kindNum = objc_getAssociatedObject(v, &kAXOFTargetKindKey);
+    NSInteger kind = kindNum.integerValue;
+    if (kind == 1) AXOF_ApplyAlphaKind(v, AXOF_Float(kAXOFNicknameDescAlpha, 1.00), 1);
+    else if (kind == 2) AXOF_ApplyAlphaKind(v, AXOF_Float(kAXOFRelatedSearchAlpha, 0.55), 2);
+}
+
+
+static BOOL AXOF_FrameNearRelatedRow(CGRect f, CGRect row, CGSize s) {
+    if (CGRectIsEmpty(f) || CGRectIsEmpty(row)) return NO;
+    CGFloat cy = CGRectGetMidY(f);
+    CGFloat rcy = CGRectGetMidY(row);
+    BOOL sameY = fabs(cy - rcy) < MAX(42.0, row.size.height * 0.70);
+    BOOL leftArea = f.origin.x < s.width * 0.58;
+    BOOL smallEnough = f.size.width <= s.width * 0.78 && f.size.height <= 104.0;
+    BOOL overlapsExpandedRow = CGRectIntersectsRect(f, CGRectInset(row, -48.0, -22.0));
+    return (sameY || overlapsExpandedRow) && leftArea && smallEnough;
+}
+
+static void AXOF_ApplyRelatedNearbyInView(UIView *root, CGRect row, CGFloat alpha, NSInteger depth) {
+    if (!root || depth > 6 || AXOF_IsAwemeXOwnView(root)) return;
+    CGSize s = UIScreen.mainScreen.bounds.size;
+    for (UIView *sub in root.subviews) {
+        if (AXOF_HasMarkedRelatedSearchAncestor(sub)) continue;
+        CGRect f = AXOF_WindowFrame(sub);
+        NSString *cls = NSStringFromClass(sub.class);
+        NSString *lowerCls = cls.lowercaseString;
+        NSString *txt = AXOF_ViewText(sub);
+        BOOL classLooksRight = [sub isKindOfClass:UILabel.class] || [sub isKindOfClass:UIButton.class] || [sub isKindOfClass:UIImageView.class] ||
+                               [lowerCls containsString:@"icon"] || [lowerCls containsString:@"image"] || [lowerCls containsString:@"glyph"] ||
+                               [lowerCls containsString:@"mix"] || [lowerCls containsString:@"collection"] || [lowerCls containsString:@"series"] ||
+                               [lowerCls containsString:@"playlist"] || [lowerCls containsString:@"search"] || [lowerCls containsString:@"relation"] ||
+                               [lowerCls containsString:@"label"] || [lowerCls containsString:@"text"];
+        BOOL textLooksRight = txt.length > 0 && ([txt containsString:@"相关搜索"] || [txt containsString:@"相关视频"] || [txt containsString:@"搜索"] || [txt containsString:@"合集"] || [txt containsString:@"·"] || txt.length <= 48);
+        if ((classLooksRight || textLooksRight) && AXOF_FrameNearRelatedRow(f, row, s)) {
+            AXOF_ApplyAlphaKind(sub, alpha, 2);
+        }
+        AXOF_ApplyRelatedNearbyInView(sub, row, alpha, depth + 1);
+    }
+}
+
+static void AXOF_ApplyRelatedRowSiblings(UIView *container) {
+    if (!container) return;
+    CGFloat alpha = AXOF_Float(kAXOFRelatedSearchAlpha, 0.55);
+    CGRect row = AXOF_WindowFrame(container);
+    if (CGRectIsEmpty(row)) return;
+    row = CGRectInset(row, -140.0, -28.0);
+    UIView *root = container.superview ?: container;
+    for (NSInteger i = 0; i < 3 && root.superview; i++) root = root.superview;
+    AXOF_ApplyRelatedNearbyInView(root, row, alpha, 0);
+}
+
+static void AXOF_ApplyView(UIView *v) {
+    if (!v || AXOF_IsAwemeXOwnView(v)) return;
+    if (AXOF_IsRelatedSearchView(v)) {
+        UIView *container = AXOF_FindRelatedSearchContainer(v) ?: v;
+        if (!AXOF_IsAwemeXOwnView(container)) {
+            objc_setAssociatedObject(container, &kAXOFRelatedContainerKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            // V36：相关搜索/相关视频/合集横条本身也接受“相关搜索不透明度”，
+            // 这样左侧图标、标题和横条背景能一起变化；只允许安全的小横条容器，避免评论/分享大面板被误伤。
+            if (AXOF_IsSafeRelatedContainerFrame(container)) {
+                AXOF_ApplyAlphaKind(container, AXOF_Float(kAXOFRelatedSearchAlpha, 0.55), 2);
+            } else if ([v isKindOfClass:UILabel.class] || [v isKindOfClass:UIButton.class] || [v isKindOfClass:UIImageView.class]) {
+                AXOF_ApplyAlphaKind(v, AXOF_Float(kAXOFRelatedSearchAlpha, 0.55), 2);
+            }
+            AXOF_ApplyRelatedRowSiblings(container);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ AXOF_ApplyRelatedRowSiblings(container); });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.75 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ AXOF_ApplyRelatedRowSiblings(container); });
+        }
+        return;
+    }
+    if (AXOF_IsNicknameDescView(v)) {
+        AXOF_ApplyAlphaKind(v, AXOF_Float(kAXOFNicknameDescAlpha, 1.00), 1);
+        return;
+    }
+    AXOF_ReapplyMarkedView(v);
+}
+
+static void AXOF_RefreshRecursive(UIView *v) {
+    if (!v) return;
+    AXOF_ApplyView(v);
+    for (UIView *sub in v.subviews) AXOF_RefreshRecursive(sub);
+}
+
+static void AXOF_RefreshAll(void) {
+    UIApplication *app = UIApplication.sharedApplication;
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in app.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) AXOF_RefreshRecursive(w);
+        }
+        return;
+    }
+    for (UIWindow *w in app.windows) AXOF_RefreshRecursive(w);
+}
+
+@interface AXOFSettingsTarget : NSObject
++ (instancetype)shared;
+- (void)openOpacityPanel;
+- (void)closeOpacityPanel;
+- (void)sliderChanged:(UISlider *)sender;
+@end
+
+@implementation AXOFSettingsTarget
++ (instancetype)shared {
+    static AXOFSettingsTarget *t;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ t = [AXOFSettingsTarget new]; });
+    return t;
+}
+
+- (void)closeOpacityPanel { [axofPanel removeFromSuperview]; axofPanel = nil; }
+
+- (void)sliderChanged:(UISlider *)sender {
+    NSString *key = sender.tag == 2501 ? kAXOFNicknameDescAlpha : kAXOFRelatedSearchAlpha;
+    AXOF_Set(key, @(sender.value));
+    UILabel *val = [axofPanel viewWithTag:sender.tag + 100];
+    val.text = [NSString stringWithFormat:@"%.0f%%", sender.value * 100.0];
+    AXOF_RefreshAll();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ AXOF_RefreshAll(); });
+}
+
+- (void)openOpacityPanel {
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *window = AXActiveWindow();
-        if (!window) return;
+        UIWindow *w = AXOF_KeyWindow();
+        if (!w) return;
+        if (axofPanel) { [self closeOpacityPanel]; return; }
+        CGRect b = UIScreen.mainScreen.bounds;
+        CGFloat width = MIN(340.0, b.size.width - 120.0);
+        CGFloat height = MIN(520.0, b.size.height - 80.0);
+        axofPanel = [[UIView alloc] initWithFrame:CGRectMake((b.size.width - width) / 2.0, (b.size.height - height) / 2.0, width, height)];
+        axofPanel.tag = 42030;
+        axofPanel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.86];
+        axofPanel.layer.cornerRadius = 18;
+        axofPanel.clipsToBounds = YES;
+        axofPanel.layer.zPosition = CGFLOAT_MAX;
+        [w addSubview:axofPanel];
 
-        NSNumber *installed = objc_getAssociatedObject(window, &kAXTwoFingerGestureInstalledKey);
-        if (installed.boolValue) return;
+        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 18, width, 26)];
+        title.text = @"透明度";
+        title.textColor = UIColor.whiteColor;
+        title.textAlignment = NSTextAlignmentCenter;
+        title.font = [UIFont boldSystemFontOfSize:17];
+        [axofPanel addSubview:title];
 
-        UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc] initWithTarget:[AXTwoFingerLongPressTarget shared]
-                                                                                              action:@selector(handleTwoFingerLongPress:)];
-        gesture.numberOfTouchesRequired = 2;
-        gesture.minimumPressDuration = 0.75;
-        gesture.cancelsTouchesInView = NO;
-        gesture.delaysTouchesBegan = NO;
-        gesture.delaysTouchesEnded = NO;
-        gesture.delegate = [AXTwoFingerLongPressTarget shared];
-        gesture.name = @"AwemeXTwoFingerLongPress";
-        [window addGestureRecognizer:gesture];
+        UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+        close.frame = CGRectMake(width - 48, 14, 36, 34);
+        [close setTitle:@"×" forState:UIControlStateNormal];
+        [close setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+        close.titleLabel.font = [UIFont boldSystemFontOfSize:24];
+        [close addTarget:self action:@selector(closeOpacityPanel) forControlEvents:UIControlEventTouchUpInside];
+        [axofPanel addSubview:close];
 
-        axTwoFingerLongPressGesture = gesture;
-        objc_setAssociatedObject(window, &kAXTwoFingerGestureInstalledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        NSArray *names = @[@"昵称/文案不透明度", @"相关搜索不透明度"];
+        NSArray *keys = @[kAXOFNicknameDescAlpha, kAXOFRelatedSearchAlpha];
+        NSArray *defs = @[@1.00, @0.55];
+        for (NSInteger i = 0; i < 2; i++) {
+            CGFloat y = 72 + i * 112;
+            UIView *card = [[UIView alloc] initWithFrame:CGRectMake(24, y - 10, width - 48, 88)];
+            card.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.13];
+            card.layer.cornerRadius = 13;
+            card.tag = 42030;
+            [axofPanel addSubview:card];
+            UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(28, y, width - 150, 24)];
+            l.text = names[i];
+            l.textColor = UIColor.whiteColor;
+            l.font = [UIFont boldSystemFontOfSize:15];
+            [axofPanel addSubview:l];
+
+            UILabel *val = [[UILabel alloc] initWithFrame:CGRectMake(width - 100, y, 70, 24)];
+            val.textAlignment = NSTextAlignmentRight;
+            val.textColor = UIColor.whiteColor;
+            val.font = [UIFont systemFontOfSize:14];
+            CGFloat cur = AXOF_Float(keys[i], [defs[i] floatValue]);
+            val.text = [NSString stringWithFormat:@"%.0f%%", cur * 100.0];
+            val.tag = 2601 + i;
+            [axofPanel addSubview:val];
+
+            UISlider *s = [[UISlider alloc] initWithFrame:CGRectMake(28, y + 30, width - 56, 32)];
+            s.tag = 2501 + i;
+            s.minimumValue = 0.05;
+            s.maximumValue = 1.0;
+            s.value = cur;
+            [s addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
+            [axofPanel addSubview:s];
+        }
+
+        UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(28, height - 78, width - 56, 58)];
+        tip.text = @"V36：增强中部文案与相关搜索/合集整行透明；继续排除评论/分享弹层。";
+        tip.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.62];
+        tip.font = [UIFont systemFontOfSize:11];
+        tip.numberOfLines = 2;
+        [axofPanel addSubview:tip];
     });
 }
+@end
 
-#pragma mark - Hooks
+// V36：透明度滑块继续保留在主面板；增强叶子控件识别，避免 unused function。
+
+// V33：文案/相关搜索透明度已合并到主设置面板，不再额外追加子面板入口。
+
+// V33：移除全局 UIView 透明度钩子。
+// 透明度只在 UILabel / UIButton / UIImageView 叶子控件上处理，
+// 避免评论页、分享页、ActionSheet 这类复杂弹层被误伤为空白。
 
 %hook AWEElementStackView
-- (void)layoutSubviews {
-    %orig;
-    AXApplyElementEffects((id)self);
-}
-- (void)didMoveToWindow {
-    %orig;
-    AXApplyElementEffects((id)self);
-}
-- (NSArray *)arrangedSubviews {
-    NSArray *arr = %orig;
-    AXApplyElementEffects((id)self);
-    return arr;
-}
+- (void)layoutSubviews { %orig; AXApplyElementEffects((UIView *)self); }
+- (void)didMoveToWindow { %orig; AXApplyElementEffects((UIView *)self); }
+- (NSArray *)arrangedSubviews { NSArray *r = %orig; AXApplyElementEffects((UIView *)self); return r; }
 - (void)setTransform:(CGAffineTransform)transform {
+    if (!axApplyingElementEffects && AXIsRightStack((UIView *)self)) {
+        CGAffineTransform target = AXRightStackTargetTransform((UIView *)self);
+        %orig(target);
+        return;
+    }
+    if (!axApplyingElementEffects && AXIsLeftStack((UIView *)self)) {
+        CGAffineTransform target = AXLeftStackTargetTransform((UIView *)self);
+        %orig(target);
+        return;
+    }
     %orig(transform);
-    AXApplyElementEffects((id)self);
 }
 %end
 
 %hook IESLiveStackView
-- (void)layoutSubviews {
-    %orig;
-    AXApplyElementEffects((id)self);
-}
-- (void)didMoveToWindow {
-    %orig;
-    AXApplyElementEffects((id)self);
-}
-- (NSArray *)arrangedSubviews {
-    NSArray *arr = %orig;
-    AXApplyElementEffects((id)self);
-    return arr;
-}
+- (void)layoutSubviews { %orig; AXApplyElementEffects((UIView *)self); }
+- (void)didMoveToWindow { %orig; AXApplyElementEffects((UIView *)self); }
+- (NSArray *)arrangedSubviews { NSArray *r = %orig; AXApplyElementEffects((UIView *)self); return r; }
 - (void)setTransform:(CGAffineTransform)transform {
+    if (!axApplyingElementEffects && AXIsRightStack((UIView *)self)) {
+        CGAffineTransform target = AXRightStackTargetTransform((UIView *)self);
+        %orig(target);
+        return;
+    }
+    if (!axApplyingElementEffects && AXIsLeftStack((UIView *)self)) {
+        CGAffineTransform target = AXLeftStackTargetTransform((UIView *)self);
+        %orig(target);
+        return;
+    }
     %orig(transform);
-    AXApplyElementEffects((id)self);
 }
 %end
 
 %hook AWESearchEntranceView
-- (void)layoutSubviews {
-    %orig;
-    AXApplySearchEntranceHide(AXViewFromAny((id)self));
-}
-- (void)didMoveToWindow {
-    %orig;
-    AXApplySearchEntranceHide(AXViewFromAny((id)self));
-}
+- (void)layoutSubviews { %orig; AXApplySearchEntranceHide((UIView *)self); }
+- (void)didMoveToWindow { %orig; AXApplySearchEntranceHide((UIView *)self); }
 %end
 
 %hook AWEHPDiscoverFeedEntranceView
-- (void)layoutSubviews {
-    %orig;
-    AXApplySearchEntranceHide(AXViewFromAny((id)self));
-}
-- (void)didMoveToWindow {
-    %orig;
-    AXApplySearchEntranceHide(AXViewFromAny((id)self));
-}
+- (void)layoutSubviews { %orig; AXApplySearchEntranceHide((UIView *)self); }
+- (void)didMoveToWindow { %orig; AXApplySearchEntranceHide((UIView *)self); }
 %end
 
 %hook UILabel
 - (void)layoutSubviews {
     %orig;
     AXApplyOverlayLeafAlpha((UIView *)self);
+    AXOF_ApplyView((UIView *)self);
+}
+- (void)didMoveToWindow {
+    %orig;
+    AXOF_ApplyView((UIView *)self);
+}
+- (void)setAlpha:(CGFloat)alpha {
+    %orig(alpha);
+    NSNumber *kind = objc_getAssociatedObject((UIView *)self, &kAXOFTargetKindKey);
+    if (!axofApplyingAlpha && kind.integerValue > 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ AXOF_ReapplyMarkedView((UIView *)self); });
+    }
 }
 %end
 
 %hook UIButton
 - (void)layoutSubviews {
     %orig;
-    AXApplyOverlayLeafAlpha((UIView *)self);
+    if ((UIView *)self != axButton) AXApplyOverlayLeafAlpha((UIView *)self);
+    AXOF_ApplyView((UIView *)self);
+}
+- (void)didMoveToWindow {
+    %orig;
+    AXOF_ApplyView((UIView *)self);
+}
+- (void)setAlpha:(CGFloat)alpha {
+    %orig(alpha);
+    NSNumber *kind = objc_getAssociatedObject((UIView *)self, &kAXOFTargetKindKey);
+    if (!axofApplyingAlpha && kind.integerValue > 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ AXOF_ReapplyMarkedView((UIView *)self); });
+    }
 }
 %end
 
@@ -674,34 +1236,401 @@ static void AXInstallTwoFingerLongPressGesture(void) {
 - (void)layoutSubviews {
     %orig;
     AXApplyOverlayLeafAlpha((UIView *)self);
+    AXOF_ApplyView((UIView *)self);
+}
+- (void)didMoveToWindow {
+    %orig;
+    AXOF_ApplyView((UIView *)self);
+}
+- (void)setAlpha:(CGFloat)alpha {
+    %orig(alpha);
+    NSNumber *kind = objc_getAssociatedObject((UIView *)self, &kAXOFTargetKindKey);
+    if (!axofApplyingAlpha && kind.integerValue > 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ AXOF_ReapplyMarkedView((UIView *)self); });
+    }
+}
+%end
+
+// AwemeX iPad 单指长按菜单：只追加保存按钮，不改菜单背景/布局
+// 用法：把本模块粘贴到现有 AwemeX_AlphaPro.xm 末尾，重新 make package。
+// 目标：在 AWEUserActionSheetView 的 actions 里追加：保存视频 / 保存封面 / 保存音频 / 保存图片。
+// 注意：这是安全测试模块，默认开启；如果按钮出现但保存失败，说明当前抖音版本的 awemeModel 字段名需要再适配。
+
+
+static NSString * const kAXAppendSaveButtons = @"ax_append_save_buttons";
+static char kAXSaveButtonsInjectedKey;
+
+static BOOL AXSB_Bool(NSString *key, BOOL def) {
+    id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    return v ? [v boolValue] : def;
+}
+
+static id AXSB_Send0(id obj, SEL sel) {
+    if (!obj || ![obj respondsToSelector:sel]) return nil;
+    return ((id (*)(id, SEL))objc_msgSend)(obj, sel);
+}
+
+static BOOL AXSB_StrHasHTTP(NSString *s) {
+    return [s isKindOfClass:NSString.class] && ([s hasPrefix:@"http://"] || [s hasPrefix:@"https://"]);
+}
+
+static NSURL *AXSB_URLFromString(NSString *s) {
+    if (!AXSB_StrHasHTTP(s)) return nil;
+    return [NSURL URLWithString:s];
+}
+
+static NSURL *AXSB_FirstURLInObject(id obj, NSInteger depth);
+
+static NSURL *AXSB_FirstURLBySelectors(id obj, NSArray<NSString *> *sels, NSInteger depth) {
+    if (!obj || depth <= 0) return nil;
+    for (NSString *name in sels) {
+        SEL sel = NSSelectorFromString(name);
+        id value = AXSB_Send0(obj, sel);
+        NSURL *u = AXSB_FirstURLInObject(value, depth - 1);
+        if (u) return u;
+    }
+    return nil;
+}
+
+static NSURL *AXSB_FirstURLInObject(id obj, NSInteger depth) {
+    if (!obj || depth <= 0) return nil;
+
+    if ([obj isKindOfClass:NSURL.class]) return (NSURL *)obj;
+    if ([obj isKindOfClass:NSString.class]) return AXSB_URLFromString((NSString *)obj);
+
+    if ([obj isKindOfClass:NSArray.class]) {
+        for (id item in (NSArray *)obj) {
+            NSURL *u = AXSB_FirstURLInObject(item, depth - 1);
+            if (u) return u;
+        }
+        return nil;
+    }
+
+    if ([obj isKindOfClass:NSDictionary.class]) {
+        NSDictionary *dict = (NSDictionary *)obj;
+        NSArray *preferred = @[@"urlList", @"url_list", @"urls", @"url", @"URL", @"uri", @"playAddr", @"downloadAddr", @"cover", @"originCover", @"playUrl"];
+        for (NSString *k in preferred) {
+            NSURL *u = AXSB_FirstURLInObject(dict[k], depth - 1);
+            if (u) return u;
+        }
+        for (id value in dict.allValues) {
+            NSURL *u = AXSB_FirstURLInObject(value, depth - 1);
+            if (u) return u;
+        }
+        return nil;
+    }
+
+    NSArray *common = @[
+        @"urlList", @"URLList", @"url_list", @"urls", @"url", @"URL", @"uri",
+        @"playAddr", @"downloadAddr", @"playURL", @"playUrl", @"originURL", @"originUrl",
+        @"cover", @"originCover", @"dynamicCover", @"animatedCover", @"coverUrl", @"coverURL",
+        @"image", @"imageURL", @"imageUrl", @"imageUrlModel", @"urlModel"
+    ];
+    return AXSB_FirstURLBySelectors(obj, common, depth - 1);
+}
+
+static UIViewController *AXSB_TopVCFrom(UIViewController *vc) {
+    if (!vc) return nil;
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    if ([vc isKindOfClass:UINavigationController.class]) return AXSB_TopVCFrom(((UINavigationController *)vc).topViewController);
+    if ([vc isKindOfClass:UITabBarController.class]) return AXSB_TopVCFrom(((UITabBarController *)vc).selectedViewController);
+    return vc;
+}
+
+static UIWindow *AXSB_KeyWindow(void) {
+    UIApplication *app = UIApplication.sharedApplication;
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in app.connectedScenes) {
+            if (scene.activationState != UISceneActivationStateForegroundActive) continue;
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                if (w.isKeyWindow) return w;
+            }
+        }
+    }
+    for (UIWindow *w in app.windows) if (w.isKeyWindow) return w;
+    return app.windows.firstObject;
+}
+
+static UIViewController *AXSB_FindPlayVCInTree(UIViewController *vc) {
+    if (!vc) return nil;
+    NSString *name = NSStringFromClass(vc.class);
+    if ([name containsString:@"AWEPlayInteractionViewController"] || [name containsString:@"PlayInteraction"]) return vc;
+    for (UIViewController *child in vc.childViewControllers) {
+        UIViewController *hit = AXSB_FindPlayVCInTree(child);
+        if (hit) return hit;
+    }
+    return nil;
+}
+
+static UIViewController *AXSB_CurrentPlayVC(void) {
+    UIWindow *w = AXSB_KeyWindow();
+    UIViewController *top = AXSB_TopVCFrom(w.rootViewController);
+    UIViewController *hit = AXSB_FindPlayVCInTree(top);
+    if (hit) return hit;
+    return AXSB_FindPlayVCInTree(w.rootViewController);
+}
+
+static id AXSB_CurrentAwemeModel(void) {
+    UIViewController *vc = AXSB_CurrentPlayVC();
+    NSArray *sels = @[@"awemeModel", @"aweme", @"model", @"currentAweme", @"currentAwemeModel", @"currentModel", @"item"];
+    for (NSString *name in sels) {
+        id value = AXSB_Send0(vc, NSSelectorFromString(name));
+        if (value) return value;
+    }
+    return nil;
+}
+
+static NSURL *AXSB_VideoURLFromAweme(id aweme) {
+    if (!aweme) return nil;
+    id video = AXSB_Send0(aweme, @selector(video));
+    NSURL *u = AXSB_FirstURLBySelectors(video ?: aweme, @[@"downloadAddr", @"playAddr", @"h264PlayAddr", @"playApi", @"bitRate", @"video"], 6);
+    return u ?: AXSB_FirstURLInObject(video ?: aweme, 5);
+}
+
+static NSURL *AXSB_CoverURLFromAweme(id aweme) {
+    if (!aweme) return nil;
+    id video = AXSB_Send0(aweme, @selector(video));
+    NSURL *u = AXSB_FirstURLBySelectors(video ?: aweme, @[@"originCover", @"cover", @"dynamicCover", @"animatedCover", @"coverUrl", @"coverURL"], 5);
+    return u;
+}
+
+static NSURL *AXSB_AudioURLFromAweme(id aweme) {
+    if (!aweme) return nil;
+    id music = AXSB_Send0(aweme, @selector(music));
+    if (!music) music = AXSB_Send0(aweme, @selector(musicModel));
+    NSURL *u = AXSB_FirstURLBySelectors(music ?: aweme, @[@"playUrl", @"playURL", @"playUrlModel", @"downloadUrl", @"downloadURL", @"urlModel"], 6);
+    return u;
+}
+
+static NSArray<NSURL *> *AXSB_ImageURLsFromAweme(id aweme) {
+    if (!aweme) return @[];
+    NSMutableArray<NSURL *> *out = [NSMutableArray array];
+    NSArray *containers = @[
+        AXSB_Send0(aweme, @selector(images)),
+        AXSB_Send0(aweme, @selector(imageInfos)),
+        AXSB_Send0(aweme, @selector(albumImages)),
+        AXSB_Send0(aweme, @selector(imageAlbum)),
+        AXSB_Send0(aweme, @selector(imagePostInfo))
+    ];
+    for (id c in containers) {
+        if (!c) continue;
+        if ([c isKindOfClass:NSArray.class]) {
+            for (id item in (NSArray *)c) {
+                NSURL *u = AXSB_FirstURLInObject(item, 6);
+                if (u && ![out containsObject:u]) [out addObject:u];
+            }
+        } else {
+            NSURL *u = AXSB_FirstURLInObject(c, 6);
+            if (u && ![out containsObject:u]) [out addObject:u];
+        }
+    }
+    return out;
+}
+
+static void AXSB_Toast(NSString *text) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *w = AXSB_KeyWindow();
+        if (!w) return;
+        UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 260, 44)];
+        l.center = CGPointMake(CGRectGetMidX(w.bounds), CGRectGetMidY(w.bounds));
+        l.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.78];
+        l.textColor = UIColor.whiteColor;
+        l.font = [UIFont boldSystemFontOfSize:14];
+        l.textAlignment = NSTextAlignmentCenter;
+        l.text = text;
+        l.layer.cornerRadius = 12;
+        l.clipsToBounds = YES;
+        l.layer.zPosition = CGFLOAT_MAX;
+        [w addSubview:l];
+        [UIView animateWithDuration:0.25 delay:1.15 options:0 animations:^{ l.alpha = 0; } completion:^(BOOL finished) { [l removeFromSuperview]; }];
+    });
+}
+
+static void AXSB_SaveImageURL(NSURL *url, NSString *name) {
+    if (!url) { AXSB_Toast([NSString stringWithFormat:@"%@链接为空", name]); return; }
+    AXSB_Toast([NSString stringWithFormat:@"正在保存%@…", name]);
+    [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        UIImage *img = data ? [UIImage imageWithData:data] : nil;
+        if (!img) { AXSB_Toast([NSString stringWithFormat:@"%@保存失败", name]); return; }
+        UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil);
+        AXSB_Toast([NSString stringWithFormat:@"%@已保存到相册", name]);
+    }] resume];
+}
+
+static void AXSB_SaveVideoURL(NSURL *url) {
+    if (!url) { AXSB_Toast(@"视频链接为空"); return; }
+    AXSB_Toast(@"正在保存视频…");
+    NSURLSessionDownloadTask *task = [[NSURLSession sharedSession] downloadTaskWithURL:url completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
+        if (!location || error) { AXSB_Toast(@"视频下载失败"); return; }
+        NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"awemex_%@.mp4", NSUUID.UUID.UUIDString]];
+        NSURL *dst = [NSURL fileURLWithPath:tmp];
+        [[NSFileManager defaultManager] removeItemAtURL:dst error:nil];
+        NSError *moveErr = nil;
+        [[NSFileManager defaultManager] moveItemAtURL:location toURL:dst error:&moveErr];
+        if (moveErr) { AXSB_Toast(@"视频缓存失败"); return; }
+        UISaveVideoAtPathToSavedPhotosAlbum(tmp, nil, nil, nil);
+        AXSB_Toast(@"视频已保存到相册");
+    }];
+    [task resume];
+}
+
+static void AXSB_ShareAudioURL(NSURL *url) {
+    if (!url) { AXSB_Toast(@"音频链接为空"); return; }
+    AXSB_Toast(@"正在准备音频…");
+    NSURLSessionDownloadTask *task = [[NSURLSession sharedSession] downloadTaskWithURL:url completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
+        if (!location || error) { AXSB_Toast(@"音频下载失败"); return; }
+        NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"awemex_audio_%@.m4a", NSUUID.UUID.UUIDString]];
+        NSURL *dst = [NSURL fileURLWithPath:tmp];
+        [[NSFileManager defaultManager] removeItemAtURL:dst error:nil];
+        [[NSFileManager defaultManager] moveItemAtURL:location toURL:dst error:nil];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIViewController *vc = AXSB_TopVCFrom(AXSB_KeyWindow().rootViewController);
+            UIActivityViewController *avc = [[UIActivityViewController alloc] initWithActivityItems:@[dst] applicationActivities:nil];
+            avc.popoverPresentationController.sourceView = vc.view;
+            avc.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(vc.view.bounds), CGRectGetMidY(vc.view.bounds), 1, 1);
+            [vc presentViewController:avc animated:YES completion:nil];
+        });
+    }];
+    [task resume];
+}
+
+static void AXSB_HandleSaveKind(NSString *kind) {
+    id aweme = AXSB_CurrentAwemeModel();
+    if (!aweme) { AXSB_Toast(@"未找到当前视频模型"); return; }
+    if ([kind isEqualToString:@"video"]) {
+        AXSB_SaveVideoURL(AXSB_VideoURLFromAweme(aweme));
+    } else if ([kind isEqualToString:@"cover"]) {
+        AXSB_SaveImageURL(AXSB_CoverURLFromAweme(aweme), @"封面");
+    } else if ([kind isEqualToString:@"audio"]) {
+        AXSB_ShareAudioURL(AXSB_AudioURLFromAweme(aweme));
+    } else if ([kind isEqualToString:@"image"]) {
+        NSArray<NSURL *> *urls = AXSB_ImageURLsFromAweme(aweme);
+        if (urls.count == 0) { AXSB_Toast(@"图片链接为空"); return; }
+        AXSB_Toast([NSString stringWithFormat:@"正在保存%lu张图片…", (unsigned long)urls.count]);
+        for (NSURL *u in urls) AXSB_SaveImageURL(u, @"图片");
+    }
+}
+
+static id AXSB_MakeAction(NSString *title, NSString *kind) {
+    Class cls = NSClassFromString(@"AWEUserSheetAction");
+    if (!cls) return nil;
+
+    void (^handler)(id) = ^(id action) { AXSB_HandleSaveKind(kind); };
+    UIImage *img = nil;
+    if (@available(iOS 13.0, *)) {
+        NSString *sys = [kind isEqualToString:@"video"] ? @"arrow.down.circle" :
+                        [kind isEqualToString:@"cover"] ? @"photo" :
+                        [kind isEqualToString:@"audio"] ? @"music.note" : @"photo.on.rectangle";
+        img = [UIImage systemImageNamed:sys];
+    }
+
+    SEL s1 = NSSelectorFromString(@"actionWithTitle:description:image:imageStyle:handler:");
+    if ([cls respondsToSelector:s1]) {
+        return ((id (*)(id, SEL, id, id, id, NSInteger, id))objc_msgSend)(cls, s1, title, nil, img, 0, handler);
+    }
+
+    SEL s2 = NSSelectorFromString(@"actionWithTitle:image:handler:");
+    if ([cls respondsToSelector:s2]) {
+        return ((id (*)(id, SEL, id, id, id))objc_msgSend)(cls, s2, title, img, handler);
+    }
+
+    SEL s3 = NSSelectorFromString(@"actionWithTitle:handler:");
+    if ([cls respondsToSelector:s3]) {
+        return ((id (*)(id, SEL, id, id))objc_msgSend)(cls, s3, title, handler);
+    }
+
+    // 抖音/DYYY 常见构造方法：actionWithTitle:imgName:handler:
+    SEL s4 = NSSelectorFromString(@"actionWithTitle:imgName:handler:");
+    if ([cls respondsToSelector:s4]) {
+        return ((id (*)(id, SEL, id, id, id))objc_msgSend)(cls, s4, title, nil, handler);
+    }
+    return nil;
+}
+
+static NSString *AXSB_ActionTitle(id action) {
+    id t = AXSB_Send0(action, @selector(title));
+    if (!t) t = AXSB_Send0(action, @selector(actionTitle));
+    if (!t) t = AXSB_Send0(action, @selector(text));
+    if (!t && [action respondsToSelector:@selector(valueForKey:)]) {
+        @try { t = [action valueForKey:@"title"]; } @catch (NSException *e) {}
+        if (!t) { @try { t = [action valueForKey:@"_title"]; } @catch (NSException *e) {} }
+        if (!t) { @try { t = [action valueForKey:@"name"]; } @catch (NSException *e) {} }
+    }
+    return [t isKindOfClass:NSString.class] ? (NSString *)t : nil;
+}
+
+static BOOL AXSB_IsLikelyVideoLongPressActions(NSArray *actions, id sheet) {
+    if (![actions isKindOfClass:NSArray.class] || actions.count == 0) return NO;
+
+    // 不碰分享/评论等右侧入口弹层。它们也可能复用 AWEUserActionSheetView，
+    // V31 在这里追加保存按钮会导致“分享给/评论”内容空白。
+    NSArray *deny = @[@"分享", @"私信", @"朋友", @"微信", @"QQ", @"评论", @"回复", @"转发"];
+    NSArray *allow = @[@"不感兴趣", @"举报", @"清屏", @"倍速", @"保存", @"复制链接", @"一起看", @"稍后再看"];
+    BOOL hasAllow = NO;
+    NSInteger shareLikeCount = 0;
+    for (id a in actions) {
+        NSString *t = AXSB_ActionTitle(a) ?: @"";
+        for (NSString *d in deny) {
+            if ([t containsString:d]) shareLikeCount++;
+        }
+        for (NSString *ok in allow) {
+            if ([t containsString:ok]) hasAllow = YES;
+        }
+    }
+    // V36：部分 iPad 长按菜单标题取不到；只要不是明显分享/评论弹层，就允许注入。
+    if (shareLikeCount >= 2) return NO;
+
+    if (sheet) {
+        NSString *sheetName = NSStringFromClass([sheet class]);
+        if ([sheetName containsString:@"Share"] || [sheetName containsString:@"Comment"] || [sheetName containsString:@"Input"] || [sheetName containsString:@"Keyboard"]) return NO;
+    }
+    if (hasAllow) return YES;
+    return actions.count <= 12;
+}
+
+static NSArray *AXSB_ActionsByAppendingSaveButtons(NSArray *actions, id sheet) {
+    if (!AXSB_Bool(kAXAppendSaveButtons, YES)) return actions;
+    if (![actions isKindOfClass:NSArray.class]) return actions;
+    if (!AXSB_IsLikelyVideoLongPressActions(actions, sheet)) return actions;
+
+    NSNumber *done = objc_getAssociatedObject(sheet, &kAXSaveButtonsInjectedKey);
+    if (done.boolValue) return actions;
+
+    NSMutableArray *m = [actions mutableCopy];
+    NSArray *titles = @[@"保存视频", @"保存封面", @"保存音频", @"保存图片"];
+    NSArray *kinds = @[@"video", @"cover", @"audio", @"image"];
+
+    for (NSInteger i = 0; i < titles.count; i++) {
+        BOOL exists = NO;
+        for (id a in m) {
+            NSString *t = AXSB_ActionTitle(a);
+            if ([t isEqualToString:titles[i]]) { exists = YES; break; }
+        }
+        if (!exists) {
+            id action = AXSB_MakeAction(titles[i], kinds[i]);
+            if (action) [m addObject:action];
+        }
+    }
+
+    objc_setAssociatedObject(sheet, &kAXSaveButtonsInjectedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return m;
+}
+
+%hook AWEUserActionSheetView
+- (void)setActions:(NSArray *)actions {
+    NSArray *patched = AXSB_ActionsByAppendingSaveButtons(actions, self);
+    %orig(patched);
 }
 %end
 
 %hook UIApplication
-- (void)applicationDidBecomeActive:(id)application {
-    %orig(application);
-    AXInstallTwoFingerLongPressGesture();
-    UIWindow *window = AXActiveWindow();
-    if (window) AXApplyToSubviews(window);
+- (void)applicationDidBecomeActive:(UIApplication *)app {
+    %orig;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ AXShow(); AXInstallTwoFingerLongPressGesture(); AXRefreshAllStacks(); AXOF_RefreshAll(); });
 }
 %end
 
 %ctor {
-    @autoreleasepool {
-        if (!AXIsIpad()) return;
-
-        %init;
-
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            AXInstallTwoFingerLongPressGesture();
-            UIWindow *window = AXActiveWindow();
-            if (window) AXApplyToSubviews(window);
-        });
-
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            AXInstallTwoFingerLongPressGesture();
-            UIWindow *window = AXActiveWindow();
-            if (window) AXApplyToSubviews(window);
-        });
-    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ AXShow(); AXInstallTwoFingerLongPressGesture(); AXRefreshAllStacks(); AXOF_RefreshAll(); });
 }
