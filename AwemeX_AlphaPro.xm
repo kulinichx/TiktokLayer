@@ -720,18 +720,66 @@ static UILabel *AXFindContinuityLabelInView(UIView *view, NSInteger depth) {
     return nil;
 }
 
+static BOOL AXContinuityFrameInRightMiddle(UIView *view, CGRect f) {
+    if (!view || CGRectIsNull(f) || CGRectIsEmpty(f)) return NO;
+    CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
+    CGFloat screenH = UIScreen.mainScreen.bounds.size.height;
+    CGFloat cx = CGRectGetMidX(f);
+    CGFloat cy = CGRectGetMidY(f);
+    BOOL rightSide = cx > screenW * 0.70 && CGRectGetMinX(f) > screenW * 0.55;
+    BOOL middleBand = cy > screenH * 0.24 && cy < screenH * 0.82;
+    BOOL notBottomControls = CGRectGetMaxY(f) < screenH * 0.88;
+    BOOL reasonableSize = f.size.width >= 24.0 && f.size.height >= 18.0 && f.size.width <= 260.0 && f.size.height <= 220.0;
+    return rightSide && middleBand && notBottomControls && reasonableSize;
+}
+
+static BOOL AXContinuityHasRoundedVisual(UIView *view) {
+    if (!view) return NO;
+    CGFloat alpha = view.backgroundColor ? CGColorGetAlpha(view.backgroundColor.CGColor) : 0.0;
+    NSString *cls = NSStringFromClass(view.class);
+    if (view.layer.cornerRadius >= 8.0 && alpha > 0.01) return YES;
+    if (AXStringContainsAny(cls, @[@"VisualEffect", @"Blur", @"Material", @"Continu", @"AutoPlay", @"LianBo", @"SerialPlay", @"LoopPlay"])) return YES;
+    for (UIView *sub in [view.subviews copy]) {
+        CGFloat subAlpha = sub.backgroundColor ? CGColorGetAlpha(sub.backgroundColor.CGColor) : 0.0;
+        NSString *subCls = NSStringFromClass(sub.class);
+        if (sub.layer.cornerRadius >= 8.0 && subAlpha > 0.01) return YES;
+        if (AXStringContainsAny(subCls, @[@"VisualEffect", @"Blur", @"Material", @"Continu", @"AutoPlay", @"LianBo", @"SerialPlay", @"LoopPlay"])) return YES;
+    }
+    return NO;
+}
+
+static BOOL AXIsFloatingContinuityCandidate(UIView *view) {
+    if (!view || !view.window || view.hidden || AXIsAwemeXPanelView(view)) return NO;
+    if ([view isKindOfClass:UIWindow.class] || [view isKindOfClass:UIScrollView.class] || [view isKindOfClass:UITextField.class] || [view isKindOfClass:UITextView.class]) return NO;
+    CGRect f = AXWindowFrameForView(view);
+    if (!AXContinuityFrameInRightMiddle(view, f)) return NO;
+
+    NSString *txt = AXViewText(view);
+    NSString *cls = NSStringFromClass(view.class);
+    BOOL textHit = AXStringContainsAny(txt, @[@"连播", @"连续播放", @"自动连播"]);
+    BOOL classHit = AXStringContainsAny(cls, @[@"ContinuePlay", @"Continuous", @"AutoPlay", @"SerialPlay", @"LoopPlay", @"FeedContinue", @"LianBo"]);
+    if (textHit || classHit) return YES;
+
+    // 抖音极速版的“连播”有时不是普通 UILabel，而是右侧独立浮层按钮。
+    // 这里只对右侧中部、带圆角/毛玻璃视觉的小浮层做兜底，不碰右下角倍速和底栏。
+    if (AXContinuityHasRoundedVisual(view)) {
+        BOOL buttonLike = [view isKindOfClass:UIControl.class] || view.userInteractionEnabled || view.subviews.count > 0;
+        if (buttonLike && f.size.width >= 46.0 && f.size.height >= 40.0) return YES;
+    }
+    return NO;
+}
+
 static BOOL AXIsContinuityScanRoot(UIView *view) {
     if (!view || !view.window || view.hidden || AXIsAwemeXPanelView(view)) return NO;
     if ([view isKindOfClass:UIScrollView.class] || [view isKindOfClass:UITextField.class] || [view isKindOfClass:UITextView.class]) return NO;
-    if (!AXIsHomeFeedContext(view)) return NO;
     CGRect f = AXWindowFrameForView(view);
     if (CGRectIsNull(f) || CGRectIsEmpty(f)) return NO;
     CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
     CGFloat screenH = UIScreen.mainScreen.bounds.size.height;
     if (CGRectGetMaxX(f) < screenW * 0.52) return NO;
     if (CGRectGetMaxY(f) < screenH * 0.16 || f.origin.y > screenH * 0.90) return NO;
-    if (f.size.width > screenW * 0.55 || f.size.height > screenH * 0.45) return NO;
-    return YES;
+    if (f.size.width > screenW * 0.58 || f.size.height > screenH * 0.50) return NO;
+    return AXIsHomeFeedContext(view) || AXContinuityFrameInRightMiddle(view, f);
 }
 
 static void AXHideLiteContinuityButtonIfNeeded(UIView *view) {
@@ -741,15 +789,24 @@ static void AXHideLiteContinuityButtonIfNeeded(UIView *view) {
         if (marked.boolValue) AXSetContinuityHidden(view, NO);
         return;
     }
+
+    if (AXIsFloatingContinuityCandidate(view)) {
+        AXSetContinuityHidden(view, YES);
+        return;
+    }
+
     if (!AXIsContinuityScanRoot(view)) return;
-    UILabel *label = AXFindContinuityLabelInView(view, 4);
+    UILabel *label = AXFindContinuityLabelInView(view, 5);
     if (!label) return;
+    CGRect labelFrame = AXWindowFrameForView(label);
+    if (!AXContinuityFrameInRightMiddle(label, labelFrame)) return;
 
     UIView *target = label.superview ?: label;
     UIView *parent = target.superview;
     while (parent && parent != view.window && !AXIsAwemeXPanelView(parent)) {
+        CGRect pf = AXWindowFrameForView(parent);
         CGSize size = parent.bounds.size;
-        if (size.width > 0 && size.height > 0 && size.width <= 220.0 && size.height <= 220.0) {
+        if (AXContinuityFrameInRightMiddle(parent, pf) && size.width > 0 && size.height > 0 && size.width <= 260.0 && size.height <= 220.0) {
             target = parent;
             parent = parent.superview;
         } else {
@@ -1012,7 +1069,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     [aboutCard addSubview:versionTitle];
 
     UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
-    versionValue.text = @"V38";
+    versionValue.text = @"V39";
     versionValue.textColor = AXPanelSubTextColor();
     versionValue.font = [UIFont boldSystemFontOfSize:14];
     versionValue.textAlignment = NSTextAlignmentRight;
@@ -1187,7 +1244,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         [panel addSubview:close];
 
         UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(24, 58, panelW - 48, 24)];
-        sub.text = @"AwemeX for iPad · 当前版本 V38";
+        sub.text = @"AwemeX for iPad · 当前版本 V39";
         sub.textColor = [UIColor colorWithWhite:0.35 alpha:1.0];
         sub.font = [UIFont systemFontOfSize:13];
         [panel addSubview:sub];
@@ -1201,8 +1258,8 @@ static void AXReloadSettingsContent(BOOL animated) {
         text.textContainerInset = UIEdgeInsetsMake(0, 0, 20, 0);
         text.font = [UIFont systemFontOfSize:14];
         text.textColor = [UIColor colorWithWhite:0.18 alpha:1.0];
-        text.text = @"V38（极速版连播隐藏增强）\n"
-                    "· 优化抖音极速版右侧中间连播按钮隐藏命中。\n"
+        text.text = @"V39（右侧连播隐藏强力命中）\n"
+                    "· 增强抖音极速版右侧中间“连播”独立浮层的隐藏命中。\n"
                     "· 保持左上菜单隐藏、透明度、保存面板与音效等稳定逻辑不动。\n\n"
                     "V37（极速版界面隐藏增强）\n"
                     "· 界面设置新增隐藏左上菜单和隐藏右侧连播两个开关。\n"
