@@ -542,7 +542,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         [w bringSubviewToFront:axPanel];
 
         UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 20, width, 28)];
-        title.text = @"AwemeX 设置 V33";
+        title.text = @"AwemeX 设置 V37";
         title.textColor = UIColor.whiteColor;
         title.font = [UIFont boldSystemFontOfSize:18];
         title.textAlignment = NSTextAlignmentCenter;
@@ -589,7 +589,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         }
 
         UILabel *note = [[UILabel alloc] initWithFrame:CGRectMake(30, height - 98, width - 60, 22)];
-        note.text = @"V36：增强中部文案、相关搜索/合集图标与标题跟随透明；保持弹层排除。";
+        note.text = @"V37：降低滑动重扫；补强文案、相关搜索/合集整行透明。";
         note.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.50];
         note.font = [UIFont systemFontOfSize:11];
         note.numberOfLines = 1;
@@ -678,6 +678,8 @@ static void AXShow(void) {
 static char kAXOFBaseAlphaKey;
 static char kAXOFRelatedContainerKey;
 static char kAXOFTargetKindKey; // 1 = nickname/desc, 2 = related search
+static char kAXOFRelatedDelayedScheduledKey;
+static char kAXOFLastApplyTickKey;
 static BOOL axofApplyingAlpha = NO;
 static CGFloat AXOF_Clamp(CGFloat v) { return MIN(MAX(v, 0.0), 1.0); }
 
@@ -712,18 +714,49 @@ static CGRect AXOF_WindowFrame(UIView *v) {
     return [v.superview convertRect:v.frame toView:w];
 }
 
-static NSString *AXOF_ViewText(UIView *v) {
-    if ([v isKindOfClass:UILabel.class]) return ((UILabel *)v).text ?: @"";
-    if ([v isKindOfClass:UIButton.class]) return [((UIButton *)v) titleForState:UIControlStateNormal] ?: @"";
-    if ([v respondsToSelector:@selector(text)]) {
+static NSString *AXOF_StringFromMaybeAttributed(id obj) {
+    if ([obj isKindOfClass:NSString.class]) return (NSString *)obj;
+    if ([obj isKindOfClass:NSAttributedString.class]) return [(NSAttributedString *)obj string] ?: @"";
+    if ([obj respondsToSelector:@selector(string)]) {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-        id t = [v performSelector:@selector(text)];
+        id s = [obj performSelector:@selector(string)];
 #pragma clang diagnostic pop
-        if ([t isKindOfClass:NSString.class] && ((NSString *)t).length > 0) return t;
+        if ([s isKindOfClass:NSString.class]) return s;
+    }
+    return @"";
+}
+
+static NSString *AXOF_ViewText(UIView *v) {
+    if (!v) return @"";
+    if ([v isKindOfClass:UILabel.class]) {
+        UILabel *label = (UILabel *)v;
+        if (label.text.length > 0) return label.text;
+        NSString *attr = AXOF_StringFromMaybeAttributed(label.attributedText);
+        if (attr.length > 0) return attr;
+    }
+    if ([v isKindOfClass:UIButton.class]) {
+        UIButton *button = (UIButton *)v;
+        NSString *title = [button titleForState:UIControlStateNormal] ?: button.titleLabel.text ?: @"";
+        if (title.length > 0) return title;
+        NSString *attr = AXOF_StringFromMaybeAttributed(button.titleLabel.attributedText);
+        if (attr.length > 0) return attr;
+    }
+    NSArray *selectors = @[@"text", @"attributedText", @"attributedString", @"displayText", @"title", @"subtitle", @"contentText"];
+    for (NSString *selName in selectors) {
+        SEL sel = NSSelectorFromString(selName);
+        if ([v respondsToSelector:sel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            id t = [v performSelector:sel];
+#pragma clang diagnostic pop
+            NSString *s = AXOF_StringFromMaybeAttributed(t);
+            if (s.length > 0) return s;
+        }
     }
     NSString *acc = v.accessibilityLabel ?: @"";
-    return acc;
+    if (acc.length > 0) return acc;
+    return v.accessibilityValue ?: v.accessibilityIdentifier ?: @"";
 }
 
 
@@ -765,21 +798,24 @@ static BOOL AXOF_IsCommentOrShareOverlayContext(UIView *v) {
 }
 
 static BOOL AXOF_IsSafeRelatedContainerFrame(UIView *container) {
-    if (!container) return NO;
+    if (!container || !container.superview) return NO;
     CGSize s = UIScreen.mainScreen.bounds.size;
     CGRect f = AXOF_WindowFrame(container);
-    if (CGRectIsEmpty(f)) return NO;
-    return f.origin.x < s.width * 0.18 &&
-           f.origin.y > s.height * 0.12 && f.origin.y < s.height * 0.84 &&
-           f.size.width > s.width * 0.28 && f.size.width < s.width * 0.96 &&
-           f.size.height >= 20.0 && f.size.height <= 118.0;
+    if (CGRectIsEmpty(f) || f.size.width <= 0 || f.size.height <= 0) return NO;
+
+    // 相关搜索/合集在 iPad 上经常是贴左的整行横条，宽度可能接近全屏；
+    // 但高度通常很小。放宽宽度、收紧高度，避免误伤评论/分享大面板。
+    BOOL rowLike = f.origin.x < s.width * 0.10 &&
+                   f.origin.y > s.height * 0.12 && f.origin.y < s.height * 0.86 &&
+                   f.size.width > s.width * 0.24 && f.size.width <= s.width * 1.08 &&
+                   f.size.height >= 18.0 && f.size.height <= 96.0;
+    return rowLike;
 }
 
 static BOOL AXOF_IsAwemeXOwnView(UIView *v) {
     if (!v) return NO;
-    // V36：继续强排 AwemeX 自身面板与评论/分享/输入/键盘/弹层；
-    // 同时用“条评论/输入框/分享”等文字特征识别 iPad 评论页，避免昵称/文案透明度误伤评论列表。
-    if (AXOF_IsCommentOrShareOverlayContext(v)) return YES;
+    // V37：先做便宜的类名/标签排除，再做相对昂贵的评论/分享文字扫描；
+    // 这样上下滑动时不会因为每个 UILabel layout 都递归扫弹层文本而卡顿。
     UIView *cur = v;
     while (cur) {
         if (cur == axPanel || cur == axButton || cur == axofPanel) return YES;
@@ -799,12 +835,12 @@ static BOOL AXOF_IsAwemeXOwnView(UIView *v) {
             if ([name containsString:d]) return YES;
         }
         if ([r isKindOfClass:UILabel.class]) {
-            NSString *t = ((UILabel *)r).text ?: @"";
+            NSString *t = AXOF_ViewText((UIView *)r);
             if ([t containsString:@"AwemeX 设置"] || [t containsString:@"文案 / 相关搜索"] || [t containsString:@"透明度"] || [t containsString:@"不透明度"]) return YES;
         }
         r = r.nextResponder;
     }
-    return NO;
+    return AXOF_IsCommentOrShareOverlayContext(v);
 }
 
 
@@ -824,11 +860,11 @@ static UIView *AXOF_FindRelatedSearchContainer(UIView *v) {
     UIView *cur = v;
     UIView *best = v;
     NSInteger depth = 0;
-    while (cur && depth < 7) {
+    while (cur && depth < 8) {
         CGRect f = AXOF_WindowFrame(cur);
-        if (!CGRectIsEmpty(f) && f.origin.y > s.height * 0.12 && f.origin.y < s.height * 0.84 &&
-            f.origin.x < s.width * 0.25 && f.size.width > s.width * 0.35 &&
-            f.size.height > 22.0 && f.size.height < 120.0) {
+        if (!CGRectIsEmpty(f) && f.origin.y > s.height * 0.12 && f.origin.y < s.height * 0.86 &&
+            f.origin.x < s.width * 0.18 && f.size.width > s.width * 0.28 &&
+            f.size.width <= s.width * 1.08 && f.size.height > 18.0 && f.size.height < 104.0) {
             best = cur;
         }
         cur = cur.superview;
@@ -860,12 +896,13 @@ static BOOL AXOF_IsRelatedSearchView(UIView *v) {
                     [lowerCls containsString:@"label"] || [lowerCls containsString:@"text"] || [lowerCls containsString:@"icon"] ||
                     [lowerCls containsString:@"image"] || [lowerCls containsString:@"glyph"];
     if (!leafLike) return NO;
-    BOOL stripText = inStripY && f.origin.x < s.width * 0.46 && f.size.width > 16.0 &&
-                     f.size.width < s.width * 0.78 && f.size.height < 96.0 &&
-                     (txt.length > 0 && ([txt containsString:@"搜索"] || [txt containsString:@"合集"] || [txt containsString:@"相关"] || [txt containsString:@"视频"]));
-    // V36：放大镜/合集图标有时无文字，只靠同一横条位置与尺寸识别。
-    BOOL stripIcon = inStripY && f.origin.x < s.width * 0.22 && f.size.width <= 86.0 && f.size.height <= 86.0;
-    return stripText || stripIcon;
+    BOOL stripText = inStripY && f.origin.x < s.width * 0.62 && f.size.width > 12.0 &&
+                     f.size.width < s.width * 1.05 && f.size.height < 98.0 &&
+                     (txt.length > 0 && ([txt containsString:@"搜索"] || [txt containsString:@"合集"] || [txt containsString:@"相关"] || [txt containsString:@"视频"] || [txt containsString:@"下一章"] || [txt containsString:@"上一章"]));
+    // V37：放大镜/合集图标、整行背景有时无文字，只靠同一横条位置与尺寸识别。
+    BOOL stripIcon = inStripY && f.origin.x < s.width * 0.24 && f.size.width <= 96.0 && f.size.height <= 96.0;
+    BOOL stripContainer = inStripY && f.origin.x < s.width * 0.10 && f.size.width > s.width * 0.28 && f.size.width <= s.width * 1.08 && f.size.height >= 18.0 && f.size.height <= 96.0;
+    return stripText || stripIcon || stripContainer;
 }
 
 static BOOL AXOF_IsNicknameDescView(UIView *v) {
@@ -884,6 +921,8 @@ static BOOL AXOF_IsNicknameDescView(UIView *v) {
                         [lowerCls containsString:@"desc"] || [lowerCls containsString:@"caption"] ||
                         [lowerCls containsString:@"attributed"] || [lowerCls containsString:@"rich"] ||
                         [lowerCls containsString:@"yylabel"] || [lowerCls containsString:@"ttt"] ||
+                        [lowerCls containsString:@"duilabel"] || [lowerCls containsString:@"dux"] ||
+                        [lowerCls containsString:@"attributed"] || [lowerCls containsString:@"rich"] ||
                         [lowerCls containsString:@"nickname"] || [lowerCls containsString:@"author"] ||
                         [lowerCls containsString:@"feedanchor"] || [lowerCls containsString:@"playinteraction"];
     if (!textLikeLeaf) return NO;
@@ -901,7 +940,8 @@ static BOOL AXOF_IsNicknameDescView(UIView *v) {
     if (txt.length == 0) return NO;
     if ([txt hasPrefix:@"@"] || [txt containsString:@"#"] || [txt containsString:@"IP属地"] ||
         [txt containsString:@"作者声明"] || [txt containsString:@"虚构演绎"] || [txt containsString:@"展开"] ||
-        [txt containsString:@"收起"] || [txt containsString:@"原声"] || [txt containsString:@"音乐"]) return YES;
+        [txt containsString:@"收起"] || [txt containsString:@"原声"] || [txt containsString:@"音乐"] ||
+        [txt containsString:@"创作灵感"] || [txt containsString:@"青年创作者"] || [txt containsString:@"频道"]) return YES;
 
     // V36：覆盖部分 iPad 中部文案：类名不明显但能取到文字，位置在 feed 文案区，且不是右侧按钮/弹层。
     BOOL looksLikeFeedCaptionText = txt.length >= 2 && txt.length <= 220 &&
@@ -954,9 +994,9 @@ static BOOL AXOF_FrameNearRelatedRow(CGRect f, CGRect row, CGSize s) {
     CGFloat cy = CGRectGetMidY(f);
     CGFloat rcy = CGRectGetMidY(row);
     BOOL sameY = fabs(cy - rcy) < MAX(42.0, row.size.height * 0.70);
-    BOOL leftArea = f.origin.x < s.width * 0.58;
-    BOOL smallEnough = f.size.width <= s.width * 0.78 && f.size.height <= 104.0;
-    BOOL overlapsExpandedRow = CGRectIntersectsRect(f, CGRectInset(row, -48.0, -22.0));
+    BOOL leftArea = f.origin.x < s.width * 0.72;
+    BOOL smallEnough = f.size.width <= s.width * 1.08 && f.size.height <= 110.0;
+    BOOL overlapsExpandedRow = CGRectIntersectsRect(f, CGRectInset(row, -56.0, -24.0));
     return (sameY || overlapsExpandedRow) && leftArea && smallEnough;
 }
 
@@ -973,9 +1013,11 @@ static void AXOF_ApplyRelatedNearbyInView(UIView *root, CGRect row, CGFloat alph
                                [lowerCls containsString:@"icon"] || [lowerCls containsString:@"image"] || [lowerCls containsString:@"glyph"] ||
                                [lowerCls containsString:@"mix"] || [lowerCls containsString:@"collection"] || [lowerCls containsString:@"series"] ||
                                [lowerCls containsString:@"playlist"] || [lowerCls containsString:@"search"] || [lowerCls containsString:@"relation"] ||
-                               [lowerCls containsString:@"label"] || [lowerCls containsString:@"text"];
-        BOOL textLooksRight = txt.length > 0 && ([txt containsString:@"相关搜索"] || [txt containsString:@"相关视频"] || [txt containsString:@"搜索"] || [txt containsString:@"合集"] || [txt containsString:@"·"] || txt.length <= 48);
-        if ((classLooksRight || textLooksRight) && AXOF_FrameNearRelatedRow(f, row, s)) {
+                               [lowerCls containsString:@"label"] || [lowerCls containsString:@"text"] || [lowerCls containsString:@"container"] ||
+                               [lowerCls containsString:@"background"] || [lowerCls containsString:@"cell"] || [lowerCls containsString:@"card"];
+        BOOL textLooksRight = txt.length > 0 && ([txt containsString:@"相关搜索"] || [txt containsString:@"相关视频"] || [txt containsString:@"搜索"] || [txt containsString:@"合集"] || [txt containsString:@"下一章"] || [txt containsString:@"上一章"] || [txt containsString:@"·"] || txt.length <= 48);
+        BOOL rowBackgroundLike = txt.length == 0 && f.origin.x < s.width * 0.12 && f.size.width > s.width * 0.22 && f.size.height >= 18.0 && f.size.height <= 96.0;
+        if ((classLooksRight || textLooksRight || rowBackgroundLike) && AXOF_FrameNearRelatedRow(f, row, s)) {
             AXOF_ApplyAlphaKind(sub, alpha, 2);
         }
         AXOF_ApplyRelatedNearbyInView(sub, row, alpha, depth + 1);
@@ -987,10 +1029,25 @@ static void AXOF_ApplyRelatedRowSiblings(UIView *container) {
     CGFloat alpha = AXOF_Float(kAXOFRelatedSearchAlpha, 0.55);
     CGRect row = AXOF_WindowFrame(container);
     if (CGRectIsEmpty(row)) return;
-    row = CGRectInset(row, -140.0, -28.0);
+    row = CGRectInset(row, -150.0, -30.0);
     UIView *root = container.superview ?: container;
     for (NSInteger i = 0; i < 3 && root.superview; i++) root = root.superview;
     AXOF_ApplyRelatedNearbyInView(root, row, alpha, 0);
+}
+
+static void AXOF_ScheduleRelatedRowSiblings(UIView *container) {
+    if (!container) return;
+    NSNumber *scheduled = objc_getAssociatedObject(container, &kAXOFRelatedDelayedScheduledKey);
+    if (scheduled.boolValue) return;
+    objc_setAssociatedObject(container, &kAXOFRelatedDelayedScheduledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    AXOF_ApplyRelatedRowSiblings(container);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.22 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        AXOF_ApplyRelatedRowSiblings(container);
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.72 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        AXOF_ApplyRelatedRowSiblings(container);
+        objc_setAssociatedObject(container, &kAXOFRelatedDelayedScheduledKey, @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    });
 }
 
 static void AXOF_ApplyView(UIView *v) {
@@ -1006,9 +1063,7 @@ static void AXOF_ApplyView(UIView *v) {
             } else if ([v isKindOfClass:UILabel.class] || [v isKindOfClass:UIButton.class] || [v isKindOfClass:UIImageView.class]) {
                 AXOF_ApplyAlphaKind(v, AXOF_Float(kAXOFRelatedSearchAlpha, 0.55), 2);
             }
-            AXOF_ApplyRelatedRowSiblings(container);
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ AXOF_ApplyRelatedRowSiblings(container); });
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.75 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ AXOF_ApplyRelatedRowSiblings(container); });
+            AXOF_ScheduleRelatedRowSiblings(container);
         }
         return;
     }
@@ -1017,6 +1072,53 @@ static void AXOF_ApplyView(UIView *v) {
         return;
     }
     AXOF_ReapplyMarkedView(v);
+}
+
+static BOOL AXOF_ShouldProcessLightweight(UIView *v) {
+    if (!v || !v.superview || AXIsAwemeXPanelView(v)) return NO;
+    NSNumber *kindNum = objc_getAssociatedObject(v, &kAXOFTargetKindKey);
+    if (kindNum.integerValue > 0) return YES;
+
+    CGRect f = AXOF_WindowFrame(v);
+    CGSize s = UIScreen.mainScreen.bounds.size;
+    if (CGRectIsEmpty(f) || f.size.width <= 0 || f.size.height <= 0) return NO;
+    if (f.origin.y < s.height * 0.05 || f.origin.y > s.height * 0.88) return NO;
+
+    NSString *cls = NSStringFromClass(v.class);
+    NSString *lowerCls = cls.lowercaseString;
+    NSString *txt = AXOF_ViewText(v);
+    if (txt.length > 0) {
+        if ([txt containsString:@"相关"] || [txt containsString:@"搜索"] || [txt containsString:@"合集"] || [txt containsString:@"下一章"] || [txt containsString:@"上一章"] ||
+            [txt containsString:@"#"] || [txt containsString:@"IP属地"] || [txt containsString:@"作者声明"] || [txt containsString:@"创作灵感"] ||
+            [txt containsString:@"展开"] || [txt containsString:@"收起"] || txt.length <= 220) {
+            return YES;
+        }
+    }
+
+    if ([lowerCls containsString:@"label"] || [lowerCls containsString:@"text"] || [lowerCls containsString:@"rich"] ||
+        [lowerCls containsString:@"attributed"] || [lowerCls containsString:@"nickname"] || [lowerCls containsString:@"author"] ||
+        [lowerCls containsString:@"desc"] || [lowerCls containsString:@"caption"] || [lowerCls containsString:@"search"] ||
+        [lowerCls containsString:@"mix"] || [lowerCls containsString:@"collection"] || [lowerCls containsString:@"series"] ||
+        [lowerCls containsString:@"playlist"] || [lowerCls containsString:@"icon"] || [lowerCls containsString:@"glyph"] ||
+        [lowerCls containsString:@"image"]) {
+        return YES;
+    }
+    return NO;
+}
+
+static void AXOF_ApplyViewFast(UIView *v) {
+    if (!AXOF_ShouldProcessLightweight(v)) return;
+    NSNumber *kindNum = objc_getAssociatedObject(v, &kAXOFTargetKindKey);
+    if (kindNum.integerValue > 0) {
+        AXOF_ReapplyMarkedView(v);
+        return;
+    }
+
+    NSNumber *lastNum = objc_getAssociatedObject(v, &kAXOFLastApplyTickKey);
+    CFTimeInterval now = CFAbsoluteTimeGetCurrent();
+    if (lastNum && now - lastNum.doubleValue < 0.16) return;
+    objc_setAssociatedObject(v, &kAXOFLastApplyTickKey, @(now), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    AXOF_ApplyView(v);
 }
 
 static void AXOF_RefreshRecursive(UIView *v) {
@@ -1129,7 +1231,7 @@ static void AXOF_RefreshAll(void) {
         }
 
         UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(28, height - 78, width - 56, 58)];
-        tip.text = @"V36：增强中部文案与相关搜索/合集整行透明；继续排除评论/分享弹层。";
+        tip.text = @"V37：补强文案与相关搜索/合集整行透明；减少滑动卡顿。";
         tip.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.62];
         tip.font = [UIFont systemFontOfSize:11];
         tip.numberOfLines = 2;
@@ -1194,15 +1296,29 @@ static void AXOF_RefreshAll(void) {
 - (void)didMoveToWindow { %orig; AXApplySearchEntranceHide((UIView *)self); }
 %end
 
+
+%hook UIView
+- (void)didMoveToWindow {
+    %orig;
+    NSString *lowerCls = NSStringFromClass(self.class).lowercaseString;
+    if ([lowerCls containsString:@"label"] || [lowerCls containsString:@"text"] || [lowerCls containsString:@"rich"] ||
+        [lowerCls containsString:@"attributed"] || [lowerCls containsString:@"nickname"] || [lowerCls containsString:@"desc"] ||
+        [lowerCls containsString:@"caption"] || [lowerCls containsString:@"search"] || [lowerCls containsString:@"mix"] ||
+        [lowerCls containsString:@"collection"] || [lowerCls containsString:@"series"] || [lowerCls containsString:@"playlist"]) {
+        AXOF_ApplyViewFast((UIView *)self);
+    }
+}
+%end
+
 %hook UILabel
 - (void)layoutSubviews {
     %orig;
     AXApplyOverlayLeafAlpha((UIView *)self);
-    AXOF_ApplyView((UIView *)self);
+    AXOF_ApplyViewFast((UIView *)self);
 }
 - (void)didMoveToWindow {
     %orig;
-    AXOF_ApplyView((UIView *)self);
+    AXOF_ApplyViewFast((UIView *)self);
 }
 - (void)setAlpha:(CGFloat)alpha {
     %orig(alpha);
@@ -1217,11 +1333,11 @@ static void AXOF_RefreshAll(void) {
 - (void)layoutSubviews {
     %orig;
     if ((UIView *)self != axButton) AXApplyOverlayLeafAlpha((UIView *)self);
-    AXOF_ApplyView((UIView *)self);
+    AXOF_ApplyViewFast((UIView *)self);
 }
 - (void)didMoveToWindow {
     %orig;
-    AXOF_ApplyView((UIView *)self);
+    AXOF_ApplyViewFast((UIView *)self);
 }
 - (void)setAlpha:(CGFloat)alpha {
     %orig(alpha);
@@ -1236,11 +1352,11 @@ static void AXOF_RefreshAll(void) {
 - (void)layoutSubviews {
     %orig;
     AXApplyOverlayLeafAlpha((UIView *)self);
-    AXOF_ApplyView((UIView *)self);
+    AXOF_ApplyViewFast((UIView *)self);
 }
 - (void)didMoveToWindow {
     %orig;
-    AXOF_ApplyView((UIView *)self);
+    AXOF_ApplyViewFast((UIView *)self);
 }
 - (void)setAlpha:(CGFloat)alpha {
     %orig(alpha);
