@@ -29,6 +29,7 @@ static BOOL axOpeningNativeLongPress = NO;
 static BOOL axApplyingElementEffects = NO;
 static BOOL axSettingAlpha = NO;
 static BOOL axMainRefreshScheduled = NO;
+static BOOL axHideContinuityCached = NO;
 static UILongPressGestureRecognizer *axTwoFingerLongPressGesture = nil;
 static UIWindow *axTwoFingerLongPressWindow = nil;
 static char kAXSingleLongPressGestureKey;
@@ -185,6 +186,13 @@ static NSHashTable *AXTrackedTopBarViews(void) {
 
 
 static NSHashTable *AXTrackedSearchViews(void) {
+    static NSHashTable *table = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ table = [NSHashTable weakObjectsHashTable]; });
+    return table;
+}
+
+static NSHashTable *AXTrackedContinuityViews(void) {
     static NSHashTable *table = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{ table = [NSHashTable weakObjectsHashTable]; });
@@ -643,8 +651,10 @@ static void AXApplyTopBarLeftMenuRecursive(UIView *root, NSInteger depth) {
 static char kAXContinuityHiddenMarkKey;
 static void AXSetContinuityHidden(UIView *v, BOOL hidden) {
     if (!v || AXIsAwemeXPanelView(v)) return;
+    [AXTrackedContinuityViews() addObject:v];
     objc_setAssociatedObject(v, &kAXContinuityHiddenMarkKey, hidden ? (id)@YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     v.hidden = hidden;
+    v.alpha = hidden ? 0.0 : 1.0;
     v.userInteractionEnabled = !hidden;
 }
 
@@ -697,6 +707,58 @@ static void AXApplyRightSideExtraHides(UIView *rightStack) {
     AXApplyContinuityHideRecursive(rightStack, rightStack, 0);
 }
 
+static UILabel *AXFindContinuityLabelInView(UIView *view, NSInteger depth) {
+    if (!view || depth < 0 || AXIsAwemeXPanelView(view)) return nil;
+    NSString *text = AXViewText(view);
+    if (AXStringContainsAny(text, @[@"连播", @"连续播放", @"自动连播"]) && [view isKindOfClass:UILabel.class]) {
+        return (UILabel *)view;
+    }
+    for (UIView *sub in [view.subviews copy]) {
+        UILabel *label = AXFindContinuityLabelInView(sub, depth - 1);
+        if (label) return label;
+    }
+    return nil;
+}
+
+static BOOL AXIsContinuityScanRoot(UIView *view) {
+    if (!view || !view.window || view.hidden || AXIsAwemeXPanelView(view)) return NO;
+    if ([view isKindOfClass:UIScrollView.class] || [view isKindOfClass:UITextField.class] || [view isKindOfClass:UITextView.class]) return NO;
+    if (!AXIsHomeFeedContext(view)) return NO;
+    CGRect f = AXWindowFrameForView(view);
+    if (CGRectIsNull(f) || CGRectIsEmpty(f)) return NO;
+    CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
+    CGFloat screenH = UIScreen.mainScreen.bounds.size.height;
+    if (CGRectGetMaxX(f) < screenW * 0.52) return NO;
+    if (CGRectGetMaxY(f) < screenH * 0.16 || f.origin.y > screenH * 0.90) return NO;
+    if (f.size.width > screenW * 0.55 || f.size.height > screenH * 0.45) return NO;
+    return YES;
+}
+
+static void AXHideLiteContinuityButtonIfNeeded(UIView *view) {
+    BOOL shouldHide = axHideContinuityCached;
+    NSNumber *marked = objc_getAssociatedObject(view, &kAXContinuityHiddenMarkKey);
+    if (!shouldHide) {
+        if (marked.boolValue) AXSetContinuityHidden(view, NO);
+        return;
+    }
+    if (!AXIsContinuityScanRoot(view)) return;
+    UILabel *label = AXFindContinuityLabelInView(view, 4);
+    if (!label) return;
+
+    UIView *target = label.superview ?: label;
+    UIView *parent = target.superview;
+    while (parent && parent != view.window && !AXIsAwemeXPanelView(parent)) {
+        CGSize size = parent.bounds.size;
+        if (size.width > 0 && size.height > 0 && size.width <= 220.0 && size.height <= 220.0) {
+            target = parent;
+            parent = parent.superview;
+        } else {
+            break;
+        }
+    }
+    AXSetContinuityHidden(target, YES);
+}
+
 static void AXApplyTopBarEffects(UIView *v) {
     if (!v || AXIsAwemeXPanelView(v)) return;
     [AXTrackedTopBarViews() addObject:v];
@@ -729,6 +791,13 @@ static void AXRefreshTrackedViews(void) {
     }
     for (UIView *v in [[AXTrackedSearchViews() allObjects] copy]) {
         if (v.window) AXApplySearchEntranceHide(v);
+    }
+    BOOL hideContinuity = axHideContinuityCached;
+    for (UIView *v in [[AXTrackedContinuityViews() allObjects] copy]) {
+        if (!v.window) continue;
+        NSNumber *marked = objc_getAssociatedObject(v, &kAXContinuityHiddenMarkKey);
+        if (!hideContinuity && marked.boolValue) AXSetContinuityHidden(v, NO);
+        else if (hideContinuity && marked.boolValue) AXSetContinuityHidden(v, YES);
     }
 }
 
@@ -943,7 +1012,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     [aboutCard addSubview:versionTitle];
 
     UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
-    versionValue.text = @"V37";
+    versionValue.text = @"V38";
     versionValue.textColor = AXPanelSubTextColor();
     versionValue.font = [UIFont boldSystemFontOfSize:14];
     versionValue.textAlignment = NSTextAlignmentRight;
@@ -1047,6 +1116,7 @@ static void AXReloadSettingsContent(BOOL animated) {
     else if (sender.tag == 29) key = kAXAutoCopyLinkOnSaveFail;
     if (!key) return;
     AXSet(key, @(sender.on));
+    if (sender.tag == 14) axHideContinuityCached = sender.on;
     if (sender.tag == 16) {
         AXApplySettingsChromeTheme();
         AXReloadSettingsContent(NO);
@@ -1117,7 +1187,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         [panel addSubview:close];
 
         UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(24, 58, panelW - 48, 24)];
-        sub.text = @"AwemeX for iPad · 当前版本 V37";
+        sub.text = @"AwemeX for iPad · 当前版本 V38";
         sub.textColor = [UIColor colorWithWhite:0.35 alpha:1.0];
         sub.font = [UIFont systemFontOfSize:13];
         [panel addSubview:sub];
@@ -1131,7 +1201,10 @@ static void AXReloadSettingsContent(BOOL animated) {
         text.textContainerInset = UIEdgeInsetsMake(0, 0, 20, 0);
         text.font = [UIFont systemFontOfSize:14];
         text.textColor = [UIColor colorWithWhite:0.18 alpha:1.0];
-        text.text = @"V37（极速版界面隐藏增强）\n"
+        text.text = @"V38（极速版连播隐藏增强）\n"
+                    "· 优化抖音极速版右侧中间连播按钮隐藏命中。\n"
+                    "· 保持左上菜单隐藏、透明度、保存面板与音效等稳定逻辑不动。\n\n"
+                    "V37（极速版界面隐藏增强）\n"
                     "· 界面设置新增隐藏左上菜单和隐藏右侧连播两个开关。\n"
                     "· 两个隐藏项只在首页播放页/顶栏容器内处理，保持已稳定功能不动。\n\n"
                     "V36（发布整理版）\n"
@@ -2203,6 +2276,19 @@ static void AXInstallSingleLongPressForPlayVC(id playVC) {
 }
 %end
 
+%hook UIView
+- (void)layoutSubviews {
+    %orig;
+    if (axHideContinuityCached) {
+        AXHideLiteContinuityButtonIfNeeded((UIView *)(id)self);
+    } else {
+        NSNumber *marked = objc_getAssociatedObject((UIView *)(id)self, &kAXContinuityHiddenMarkKey);
+        if (marked.boolValue) AXSetContinuityHidden((UIView *)(id)self, NO);
+    }
+}
+%end
+
 %ctor {
+    axHideContinuityCached = AXBool(kAXHideContinuityButton, NO);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ AXShow(); AXInstallTwoFingerLongPressGesture(); });
 }
