@@ -27,6 +27,9 @@ static BOOL axSettingAlpha = NO;
 static BOOL axMainRefreshScheduled = NO;
 static UILongPressGestureRecognizer *axTwoFingerLongPressGesture = nil;
 static UIWindow *axTwoFingerLongPressWindow = nil;
+static char kAXSingleLongPressGestureKey;
+static char kAXSingleLongPressOwnerKey;
+static char kAXSingleLongPressMarkerKey;
 
 static NSString * const kAXTopAlpha = @"ax_top_alpha";
 static NSString * const kAXRightAlpha = @"ax_right_alpha";
@@ -1041,6 +1044,11 @@ static id axCurrentLongPressAweme = nil;
 - (void)openNativeLongPressPanel;
 @end
 
+@interface AXSingleLongPressTarget : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+- (void)handleSingleLongPress:(UILongPressGestureRecognizer *)gesture;
+@end
+
 static BOOL AXSB_Bool(NSString *key, BOOL def) {
     id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
     return v ? [v boolValue] : def;
@@ -1496,7 +1504,92 @@ static void AXSB_ShowCustomLongPressPanelForAweme(id aweme, id playVC) {
 }
 @end
 
+
+static BOOL AXGestureIsOurSingleLongPress(UIGestureRecognizer *g) {
+    return g && [objc_getAssociatedObject(g, &kAXSingleLongPressMarkerKey) boolValue];
+}
+
+static void AXInstallSingleLongPressForPlayVC(id playVC) {
+    if (!playVC || ![playVC respondsToSelector:@selector(view)]) return;
+    UIView *view = ((UIView *(*)(id, SEL))objc_msgSend)(playVC, @selector(view));
+    if (!view || ![view isKindOfClass:UIView.class]) return;
+
+    UILongPressGestureRecognizer *existing = objc_getAssociatedObject(view, &kAXSingleLongPressGestureKey);
+    if (existing && [view.gestureRecognizers containsObject:existing]) {
+        objc_setAssociatedObject(existing, &kAXSingleLongPressOwnerKey, playVC, OBJC_ASSOCIATION_ASSIGN);
+        return;
+    }
+
+    AXSingleLongPressTarget *target = [AXSingleLongPressTarget shared];
+    UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc] initWithTarget:target action:@selector(handleSingleLongPress:)];
+    gesture.minimumPressDuration = 0.55;
+    gesture.numberOfTouchesRequired = 1;
+    gesture.cancelsTouchesInView = YES;
+    gesture.delaysTouchesBegan = NO;
+    gesture.delaysTouchesEnded = NO;
+    gesture.delegate = target;
+
+    objc_setAssociatedObject(gesture, &kAXSingleLongPressMarkerKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(gesture, &kAXSingleLongPressOwnerKey, playVC, OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(view, &kAXSingleLongPressGestureKey, gesture, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [view addGestureRecognizer:gesture];
+
+    // 关键：让抖音原生长按手势等待我们的手势失败，避免两个面板叠加。
+    for (UIGestureRecognizer *g in view.gestureRecognizers) {
+        if (g != gesture && [g isKindOfClass:UILongPressGestureRecognizer.class]) {
+            [g requireGestureRecognizerToFail:gesture];
+        }
+    }
+}
+
+@implementation AXSingleLongPressTarget
++ (instancetype)shared {
+    static AXSingleLongPressTarget *target;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ target = [AXSingleLongPressTarget new]; });
+    return target;
+}
+
+- (void)handleSingleLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    id playVC = objc_getAssociatedObject(gesture, &kAXSingleLongPressOwnerKey);
+    id aweme = AXSB_AwemeModelFromPlayVC(playVC);
+    if (!aweme && playVC && [playVC respondsToSelector:@selector(showDislikeOnVideo)]) {
+        axOpeningNativeLongPress = YES;
+        ((void (*)(id, SEL))objc_msgSend)(playVC, @selector(showDislikeOnVideo));
+        return;
+    }
+    AXSB_ShowCustomLongPressPanelForAweme(aweme, playVC);
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    if (AXGestureIsOurSingleLongPress(gestureRecognizer) || AXGestureIsOurSingleLongPress(otherGestureRecognizer)) return NO;
+    return YES;
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    UIView *v = touch.view;
+    while (v) {
+        if (AXIsInternalPanelView(v)) return NO;
+        NSString *name = NSStringFromClass(v.class);
+        if ([name containsString:@"Comment"] || [name containsString:@"Input"] || [name containsString:@"TextField"] || [name containsString:@"TextView"]) return NO;
+        v = v.superview;
+    }
+    return YES;
+}
+@end
+
 %hook AWEPlayInteractionViewController
+- (void)viewDidLoad {
+    %orig;
+    AXInstallSingleLongPressForPlayVC((id)self);
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    AXInstallSingleLongPressForPlayVC((id)self);
+}
+
 - (void)showDislikeOnVideo {
     if (axOpeningNativeLongPress) {
         axOpeningNativeLongPress = NO;
