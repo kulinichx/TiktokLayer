@@ -1,8 +1,8 @@
 Package: awemex.alphapro
 Name: AwemeX AlphaPro
-Version: 10.7-35
+Version: 10.7-36
 Architecture: iphoneos-arm64
-Description: iPad UI layer adjustment for Douyin/Aweme.
+Description: AwemeX for iPad: iPad UI layer adjustment and long-press media panel for Douyin/Aweme.
 Maintainer: kulinichx
 Author: kulinichx
 Section: Tweaks

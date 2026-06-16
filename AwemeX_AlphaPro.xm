@@ -838,7 +838,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     [aboutCard addSubview:versionTitle];
 
     UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
-    versionValue.text = @"V35";
+    versionValue.text = @"V36";
     versionValue.textColor = AXPanelSubTextColor();
     versionValue.font = [UIFont boldSystemFontOfSize:14];
     versionValue.textAlignment = NSTextAlignmentRight;
@@ -1010,7 +1010,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         [panel addSubview:close];
 
         UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(24, 58, panelW - 48, 24)];
-        sub.text = @"AwemeX for iPad · 当前版本 V35";
+        sub.text = @"AwemeX for iPad · 当前版本 V36";
         sub.textColor = [UIColor colorWithWhite:0.35 alpha:1.0];
         sub.font = [UIFont systemFontOfSize:13];
         [panel addSubview:sub];
@@ -1024,7 +1024,11 @@ static void AXReloadSettingsContent(BOOL animated) {
         text.textContainerInset = UIEdgeInsetsMake(0, 0, 20, 0);
         text.font = [UIFont systemFontOfSize:14];
         text.textColor = [UIColor colorWithWhite:0.18 alpha:1.0];
-        text.text = @"V35（保存失败兜底版）\n"
+        text.text = @"V36（发布整理版）\n"
+                    "· 版本号统一为 V36，control 版本同步为 10.7-36。\n"
+                    "· 补全 V31-V35 更新日志，整理发布说明。\n"
+                    "· 保持已稳定的透明度、缩放、长按面板、音效与保存失败兜底逻辑不动。\n\n"
+                    "V35（保存失败兜底版）\n"
                     "· 面板设置新增失败自动复制链接开关，默认开启。\n"
                     "· 视频下载、缓存或保存失败时自动复制当前视频链接，方便手动验证源地址。\n"
                     "· 不改动已稳定的 UI、透明度、缩放、长按面板与音效逻辑。\n\n"
