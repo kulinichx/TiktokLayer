@@ -23,6 +23,7 @@ static UIView *axLongPressOverlay = nil;
 static UIView *axLongPressPanel = nil;
 static NSArray *axLongPressCurrentItems = nil;
 static NSArray *axVideoSourceCurrentItems = nil;
+static NSString *axCurrentSavingVideoURLString = nil;
 static id axNativeLongPressPlayVC = nil;
 static BOOL axOpeningNativeLongPress = NO;
 static BOOL axApplyingElementEffects = NO;
@@ -57,6 +58,7 @@ static NSString * const kAXLPPanelSettingsExpanded = @"ax_lp_panel_settings_expa
 static NSString * const kAXUISettingsExpanded = @"ax_ui_settings_expanded";
 static NSString * const kAXPanelLightMode = @"ax_panel_light_mode";
 static NSString * const kAXSaveSuccessSound = @"ax_save_success_sound";
+static NSString * const kAXAutoCopyLinkOnSaveFail = @"ax_auto_copy_link_on_save_fail";
 
 static CGFloat AXFloat(NSString *key, CGFloat def) {
     id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
@@ -796,9 +798,9 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     y += 56.0;
 
     if (lpExpanded) {
-        NSArray *lpNames = @[@"保存视频", @"保存封面", @"保存音频", @"保存图片", @"保存所有图片", @"复制文案", @"复制视频链接", @"保存成功音效"];
-        NSArray *lpKeys = @[kAXLPPanelSaveVideo, kAXLPPanelSaveCover, kAXLPPanelSaveAudio, kAXLPPanelSaveImage, kAXLPPanelSaveAllImages, kAXLPPanelCopyText, kAXLPPanelCopyVideoLink, kAXSaveSuccessSound];
-        NSArray *lpDefs = @[@YES, @YES, @YES, @YES, @YES, @NO, @YES, @YES];
+        NSArray *lpNames = @[@"保存视频", @"保存封面", @"保存音频", @"保存图片", @"保存所有图片", @"复制文案", @"复制视频链接", @"保存成功音效", @"失败自动复制链接"];
+        NSArray *lpKeys = @[kAXLPPanelSaveVideo, kAXLPPanelSaveCover, kAXLPPanelSaveAudio, kAXLPPanelSaveImage, kAXLPPanelSaveAllImages, kAXLPPanelCopyText, kAXLPPanelCopyVideoLink, kAXSaveSuccessSound, kAXAutoCopyLinkOnSaveFail];
+        NSArray *lpDefs = @[@YES, @YES, @YES, @YES, @YES, @NO, @YES, @YES, @YES];
         for (NSInteger i = 0; i < (NSInteger)lpNames.count; i++) {
         UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(30, y, width - 130, 34.0)];
         l.text = lpNames[i];
@@ -836,7 +838,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     [aboutCard addSubview:versionTitle];
 
     UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
-    versionValue.text = @"V34";
+    versionValue.text = @"V35";
     versionValue.textColor = AXPanelSubTextColor();
     versionValue.font = [UIFont boldSystemFontOfSize:14];
     versionValue.textAlignment = NSTextAlignmentRight;
@@ -935,6 +937,7 @@ static void AXReloadSettingsContent(BOOL animated) {
     else if (sender.tag == 26) key = kAXLPPanelCopyText;
     else if (sender.tag == 27) key = kAXLPPanelCopyVideoLink;
     else if (sender.tag == 28) key = kAXSaveSuccessSound;
+    else if (sender.tag == 29) key = kAXAutoCopyLinkOnSaveFail;
     if (!key) return;
     AXSet(key, @(sender.on));
     if (sender.tag == 14) {
@@ -1007,7 +1010,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         [panel addSubview:close];
 
         UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(24, 58, panelW - 48, 24)];
-        sub.text = @"AwemeX for iPad · 当前版本 V34";
+        sub.text = @"AwemeX for iPad · 当前版本 V35";
         sub.textColor = [UIColor colorWithWhite:0.35 alpha:1.0];
         sub.font = [UIFont systemFontOfSize:13];
         [panel addSubview:sub];
@@ -1021,7 +1024,11 @@ static void AXReloadSettingsContent(BOOL animated) {
         text.textContainerInset = UIEdgeInsetsMake(0, 0, 20, 0);
         text.font = [UIFont systemFontOfSize:14];
         text.textColor = [UIColor colorWithWhite:0.18 alpha:1.0];
-        text.text = @"V34（日志面板修正版）\n"
+        text.text = @"V35（保存失败兜底版）\n"
+                    "· 面板设置新增失败自动复制链接开关，默认开启。\n"
+                    "· 视频下载、缓存或保存失败时自动复制当前视频链接，方便手动验证源地址。\n"
+                    "· 不改动已稳定的 UI、透明度、缩放、长按面板与音效逻辑。\n\n"
+                    "V34（日志面板修正版）\n"
                     "· 更新日志弹窗固定使用浅色样式，避免深色模式下文字看不清。\n"
                     "· 仅调整更新日志 UI，不改动保存、透明度、长按面板等稳定逻辑。\n\n"
                     "V33（成功音效修正版）\n"
@@ -1530,6 +1537,16 @@ static void AXSB_PlaySaveSuccessFeedback(void) {
 }
 
 
+
+static void AXSB_CopyVideoLinkAfterSaveFailure(NSURL *url) {
+    if (!AXSB_Bool(kAXAutoCopyLinkOnSaveFail, YES)) return;
+    NSString *link = url.absoluteString.length ? url.absoluteString : axCurrentSavingVideoURLString;
+    if (link.length == 0) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIPasteboard.generalPasteboard.string = link;
+    });
+}
+
 static UIButton *AXSB_MakePanelButton(NSString *title, NSInteger tag, CGRect frame);
 static void AXSB_SaveVideoURL(NSURL *url);
 
@@ -1669,16 +1686,17 @@ static void AXSB_SaveImageURL(NSURL *url, NSString *name) {
 
 static void AXSB_SaveVideoURL(NSURL *url) {
     if (!url) { AXSB_Toast(@"视频链接为空"); return; }
+    axCurrentSavingVideoURLString = url.absoluteString;
     AXSB_Toast(@"正在保存视频…");
     NSURLSessionDownloadTask *task = [[NSURLSession sharedSession] downloadTaskWithURL:url completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
-        if (!location || error) { AXSB_Toast(@"视频下载失败"); return; }
+        if (!location || error) { AXSB_CopyVideoLinkAfterSaveFailure(url); AXSB_Toast(@"视频下载失败，已复制链接"); return; }
         NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"awemex_%@.mp4", NSUUID.UUID.UUIDString]];
         NSURL *dst = [NSURL fileURLWithPath:tmp];
         [[NSFileManager defaultManager] removeItemAtURL:dst error:nil];
         NSError *moveErr = nil;
         [[NSFileManager defaultManager] moveItemAtURL:location toURL:dst error:&moveErr];
-        if (moveErr) { AXSB_Toast(@"视频缓存失败"); return; }
-        if (!UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(tmp)) { AXSB_Toast(@"视频格式不兼容"); return; }
+        if (moveErr) { AXSB_CopyVideoLinkAfterSaveFailure(url); AXSB_Toast(@"视频缓存失败，已复制链接"); return; }
+        if (!UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(tmp)) { AXSB_CopyVideoLinkAfterSaveFailure(url); AXSB_Toast(@"视频格式不兼容，已复制链接"); return; }
         UISaveVideoAtPathToSavedPhotosAlbum(tmp, [AXLongPressPanelTarget shared], @selector(video:didFinishSavingWithError:contextInfo:), nil);
     }];
     [task resume];
@@ -1922,8 +1940,14 @@ static void AXSB_ShowCustomLongPressPanelForAweme(id aweme, id playVC) {
 }
 
 - (void)video:(NSString *)videoPath didFinishSavingWithError:(NSError *)error contextInfo:(void *)contextInfo {
-    if (!error) AXSB_PlaySaveSuccessFeedback();
-    AXSB_Toast(error ? @"视频保存失败" : @"视频已保存到相册");
+    if (!error) {
+        AXSB_PlaySaveSuccessFeedback();
+        axCurrentSavingVideoURLString = nil;
+        AXSB_Toast(@"视频已保存到相册");
+    } else {
+        AXSB_CopyVideoLinkAfterSaveFailure(nil);
+        AXSB_Toast(@"视频保存失败，已复制链接");
+    }
 }
 
 - (void)closeLongPressPanel {
