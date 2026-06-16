@@ -39,6 +39,7 @@ static NSString * const kAXLPPanelSaveAudio = @"ax_lp_panel_save_audio";
 static NSString * const kAXLPPanelSaveImage = @"ax_lp_panel_save_image";
 static NSString * const kAXLPPanelSaveAllImages = @"ax_lp_panel_save_all_images";
 static NSString * const kAXLPPanelCopyText = @"ax_lp_panel_copy_text";
+static NSString * const kAXLPPanelSettingsExpanded = @"ax_lp_panel_settings_expanded";
 
 static CGFloat AXFloat(NSString *key, CGFloat def) {
     id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
@@ -601,6 +602,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
 - (void)sliderChanged:(UISlider *)sender;
 - (void)sliderCommit:(UISlider *)sender;
 - (void)switchChanged:(UISwitch *)sender;
+- (void)toggleLongPressPanelSettings;
 @end
 
 @interface AXTwoFingerLongPressTarget : NSObject <UIGestureRecognizerDelegate>
@@ -679,6 +681,13 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
     AXScheduleMainRefresh();
 }
 
+- (void)toggleLongPressPanelSettings {
+    BOOL expanded = AXBool(kAXLPPanelSettingsExpanded, NO);
+    AXSet(kAXLPPanelSettingsExpanded, @(!expanded));
+    [self closeSettings];
+    dispatch_async(dispatch_get_main_queue(), ^{ [[AXMenuTarget shared] openSettings]; });
+}
+
 - (void)openSettings {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *w = AXKeyWindow();
@@ -700,7 +709,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         [w bringSubviewToFront:axPanel];
 
         UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 20, width, 28)];
-        title.text = @"AwemeX 设置 V43";
+        title.text = @"AwemeX 设置 V44";
         title.textColor = UIColor.whiteColor;
         title.font = [UIFont boldSystemFontOfSize:18];
         title.textAlignment = NSTextAlignmentCenter;
@@ -750,31 +759,48 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
             [axPanel addSubview:sw];
         }
 
-        UILabel *lpTitle = [[UILabel alloc] initWithFrame:CGRectMake(30, 594, width - 60, 22)];
-        lpTitle.text = @"单指长按面板";
-        lpTitle.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.78];
-        lpTitle.font = [UIFont boldSystemFontOfSize:13];
+        BOOL lpExpanded = AXBool(kAXLPPanelSettingsExpanded, NO);
+        UIButton *lpHeader = [UIButton buttonWithType:UIButtonTypeCustom];
+        lpHeader.frame = CGRectMake(24, 586, width - 48, 44);
+        lpHeader.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.055];
+        lpHeader.layer.cornerRadius = 12;
+        [lpHeader addTarget:self action:@selector(toggleLongPressPanelSettings) forControlEvents:UIControlEventTouchUpInside];
+        [axPanel addSubview:lpHeader];
+
+        UILabel *lpTitle = [[UILabel alloc] initWithFrame:CGRectMake(30, 594, width - 100, 28)];
+        lpTitle.text = @"面板设置";
+        lpTitle.textColor = UIColor.whiteColor;
+        lpTitle.font = [UIFont boldSystemFontOfSize:15];
         [axPanel addSubview:lpTitle];
 
-        NSArray *lpNames = @[@"保存视频", @"保存封面", @"保存音频", @"保存图片", @"保存所有图片", @"复制文案"];
-        NSArray *lpKeys = @[kAXLPPanelSaveVideo, kAXLPPanelSaveCover, kAXLPPanelSaveAudio, kAXLPPanelSaveImage, kAXLPPanelSaveAllImages, kAXLPPanelCopyText];
-        NSArray *lpDefs = @[@YES, @YES, @YES, @YES, @YES, @NO];
-        for (NSInteger i = 0; i < (NSInteger)lpNames.count; i++) {
-            NSInteger col = i % 2;
-            NSInteger row = i / 2;
-            CGFloat baseX = col == 0 ? 30.0 : width / 2.0 + 8.0;
-            CGFloat y = 617.0 + row * 32.0;
-            UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(baseX, y, col == 0 ? 96.0 : 104.0, 30.0)];
-            l.text = lpNames[i];
-            l.textColor = UIColor.whiteColor;
-            l.font = [UIFont boldSystemFontOfSize:12];
-            [axPanel addSubview:l];
+        UILabel *lpArrow = [[UILabel alloc] initWithFrame:CGRectMake(width - 58, 594, 28, 28)];
+        lpArrow.text = lpExpanded ? @"⌃" : @"⌄";
+        lpArrow.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.86];
+        lpArrow.font = [UIFont boldSystemFontOfSize:18];
+        lpArrow.textAlignment = NSTextAlignmentCenter;
+        [axPanel addSubview:lpArrow];
 
-            UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(baseX + (col == 0 ? 98.0 : 108.0), y - 1.0, 52.0, 32.0)];
-            sw.tag = 21 + i;
-            sw.on = AXBool(lpKeys[i], [lpDefs[i] boolValue]);
-            [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
-            [axPanel addSubview:sw];
+        if (lpExpanded) {
+            NSArray *lpNames = @[@"保存视频", @"保存封面", @"保存音频", @"保存图片", @"保存所有图片", @"复制文案"];
+            NSArray *lpKeys = @[kAXLPPanelSaveVideo, kAXLPPanelSaveCover, kAXLPPanelSaveAudio, kAXLPPanelSaveImage, kAXLPPanelSaveAllImages, kAXLPPanelCopyText];
+            NSArray *lpDefs = @[@YES, @YES, @YES, @YES, @YES, @NO];
+            for (NSInteger i = 0; i < (NSInteger)lpNames.count; i++) {
+                NSInteger col = i % 2;
+                NSInteger row = i / 2;
+                CGFloat baseX = col == 0 ? 30.0 : width / 2.0 + 8.0;
+                CGFloat y = 640.0 + row * 32.0;
+                UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(baseX, y, col == 0 ? 96.0 : 104.0, 30.0)];
+                l.text = lpNames[i];
+                l.textColor = UIColor.whiteColor;
+                l.font = [UIFont boldSystemFontOfSize:12];
+                [axPanel addSubview:l];
+
+                UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(baseX + (col == 0 ? 98.0 : 108.0), y - 1.0, 52.0, 32.0)];
+                sw.tag = 21 + i;
+                sw.on = AXBool(lpKeys[i], [lpDefs[i] boolValue]);
+                [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
+                [axPanel addSubview:sw];
+            }
         }
 
         AXResetTransformRecursive(axPanel);
@@ -921,13 +947,13 @@ static void AXShow(void) {
 - (void)setCommonSearchAnchor:(id)anchor { if (AXShouldHideRelatedModel((id)self)) { %orig(nil); return; } %orig; }
 %end
 
-// AwemeX iPad 单指长按菜单：按设置开关追加保存/复制按钮，不改菜单背景/布局
-// 用法：把本模块粘贴到现有 AwemeX_AlphaPro.xm 末尾，重新 make package。
-// 目标：在 AWEUserActionSheetView 的 actions 里追加：保存视频 / 保存封面 / 保存音频 / 保存图片 / 保存所有图片 / 复制文案；不加入生成视频。
-// 注意：这是安全测试模块，默认开启；如果按钮出现但保存失败，说明当前抖音版本的 awemeModel 字段名需要再适配。
 
+// AwemeX iPad 单指长按菜单：参考 DYYY 原逻辑，不再挂 AWEUserActionSheetView#setActions。
+// 说明：DYYY 原文件里“保存视频/保存音频/复制文案/长按面板”等入口，是在 AWEPlayInteractionViewController
+// 的播放页菜单逻辑中构造 AWEUserActionSheetView。iPad 单指长按通常会走 showDislikeOnVideo，
+// 所以这里改为 hook showDislikeOnVideo，直接弹出 AwemeX 自己的保存面板。
 
-static char kAXSaveButtonsInjectedKey;
+static id axCurrentLongPressAweme = nil;
 
 static BOOL AXSB_Bool(NSString *key, BOOL def) {
     id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
@@ -963,7 +989,6 @@ static NSURL *AXSB_FirstURLBySelectors(id obj, NSArray<NSString *> *sels, NSInte
 
 static NSURL *AXSB_FirstURLInObject(id obj, NSInteger depth) {
     if (!obj || depth <= 0) return nil;
-
     if ([obj isKindOfClass:NSURL.class]) return (NSURL *)obj;
     if ([obj isKindOfClass:NSString.class]) return AXSB_URLFromString((NSString *)obj);
 
@@ -1021,69 +1046,60 @@ static UIWindow *AXSB_KeyWindow(void) {
     return app.windows.firstObject;
 }
 
-static UIViewController *AXSB_FindPlayVCInTree(UIViewController *vc) {
-    if (!vc) return nil;
-    NSString *name = NSStringFromClass(vc.class);
-    if ([name containsString:@"AWEPlayInteractionViewController"] || [name containsString:@"PlayInteraction"]) return vc;
-    for (UIViewController *child in vc.childViewControllers) {
-        UIViewController *hit = AXSB_FindPlayVCInTree(child);
-        if (hit) return hit;
+static id AXSB_AwemeModelFromPlayVC(id playVC) {
+    NSArray *sels = @[@"awemeModel", @"aweme", @"model", @"currentAweme", @"currentAwemeModel", @"currentModel", @"item"];
+    for (NSString *name in sels) {
+        id value = AXSB_Send0(playVC, NSSelectorFromString(name));
+        if (value) return value;
+    }
+    if ([playVC respondsToSelector:@selector(valueForKey:)]) {
+        for (NSString *key in sels) {
+            @try {
+                id value = [playVC valueForKey:key];
+                if (value) return value;
+            } @catch (NSException *e) {}
+        }
     }
     return nil;
 }
 
-static UIViewController *AXSB_CurrentPlayVC(void) {
-    UIWindow *w = AXSB_KeyWindow();
-    UIViewController *top = AXSB_TopVCFrom(w.rootViewController);
-    UIViewController *hit = AXSB_FindPlayVCInTree(top);
-    if (hit) return hit;
-    return AXSB_FindPlayVCInTree(w.rootViewController);
-}
-
 static id AXSB_CurrentAwemeModel(void) {
-    UIViewController *vc = AXSB_CurrentPlayVC();
-    NSArray *sels = @[@"awemeModel", @"aweme", @"model", @"currentAweme", @"currentAwemeModel", @"currentModel", @"item"];
-    for (NSString *name in sels) {
-        id value = AXSB_Send0(vc, NSSelectorFromString(name));
-        if (value) return value;
-    }
+    if (axCurrentLongPressAweme) return axCurrentLongPressAweme;
     return nil;
 }
 
 static NSURL *AXSB_VideoURLFromAweme(id aweme) {
     if (!aweme) return nil;
     id video = AXSB_Send0(aweme, @selector(video));
-    NSURL *u = AXSB_FirstURLBySelectors(video ?: aweme, @[@"downloadAddr", @"playAddr", @"h264PlayAddr", @"playApi", @"bitRate", @"video"], 6);
+    NSURL *u = AXSB_FirstURLBySelectors(video ?: aweme, @[@"downloadAddr", @"playAddr", @"h264PlayAddr", @"h264URL", @"playURL", @"playApi", @"bitRate", @"video"], 6);
     return u ?: AXSB_FirstURLInObject(video ?: aweme, 5);
 }
 
 static NSURL *AXSB_CoverURLFromAweme(id aweme) {
     if (!aweme) return nil;
     id video = AXSB_Send0(aweme, @selector(video));
-    NSURL *u = AXSB_FirstURLBySelectors(video ?: aweme, @[@"originCover", @"cover", @"dynamicCover", @"animatedCover", @"coverUrl", @"coverURL"], 5);
-    return u;
+    return AXSB_FirstURLBySelectors(video ?: aweme, @[@"originCover", @"cover", @"dynamicCover", @"animatedCover", @"coverUrl", @"coverURL"], 5);
 }
 
 static NSURL *AXSB_AudioURLFromAweme(id aweme) {
     if (!aweme) return nil;
     id music = AXSB_Send0(aweme, @selector(music));
     if (!music) music = AXSB_Send0(aweme, @selector(musicModel));
-    NSURL *u = AXSB_FirstURLBySelectors(music ?: aweme, @[@"playUrl", @"playURL", @"playUrlModel", @"downloadUrl", @"downloadURL", @"urlModel"], 6);
-    return u;
+    return AXSB_FirstURLBySelectors(music ?: aweme, @[@"playUrl", @"playURL", @"playUrlModel", @"downloadUrl", @"downloadURL", @"urlModel"], 6);
 }
 
 static NSArray<NSURL *> *AXSB_ImageURLsFromAweme(id aweme) {
     if (!aweme) return @[];
     NSMutableArray<NSURL *> *out = [NSMutableArray array];
     NSArray *containers = @[
-        AXSB_Send0(aweme, @selector(images)),
-        AXSB_Send0(aweme, @selector(imageInfos)),
-        AXSB_Send0(aweme, @selector(albumImages)),
-        AXSB_Send0(aweme, @selector(imageAlbum)),
-        AXSB_Send0(aweme, @selector(imagePostInfo))
+        AXSB_Send0(aweme, @selector(images)) ?: [NSNull null],
+        AXSB_Send0(aweme, @selector(imageInfos)) ?: [NSNull null],
+        AXSB_Send0(aweme, @selector(albumImages)) ?: [NSNull null],
+        AXSB_Send0(aweme, @selector(imageAlbum)) ?: [NSNull null],
+        AXSB_Send0(aweme, @selector(imagePostInfo)) ?: [NSNull null]
     ];
     for (id c in containers) {
-        if (!c) continue;
+        if (!c || c == (id)NSNull.null) continue;
         if ([c isKindOfClass:NSArray.class]) {
             for (id item in (NSArray *)c) {
                 NSURL *u = AXSB_FirstURLInObject(item, 6);
@@ -1155,6 +1171,7 @@ static void AXSB_ShareAudioURL(NSURL *url) {
         [[NSFileManager defaultManager] moveItemAtURL:location toURL:dst error:nil];
         dispatch_async(dispatch_get_main_queue(), ^{
             UIViewController *vc = AXSB_TopVCFrom(AXSB_KeyWindow().rootViewController);
+            if (!vc) return;
             UIActivityViewController *avc = [[UIActivityViewController alloc] initWithActivityItems:@[dst] applicationActivities:nil];
             avc.popoverPresentationController.sourceView = vc.view;
             avc.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(vc.view.bounds), CGRectGetMidY(vc.view.bounds), 1, 1);
@@ -1175,8 +1192,7 @@ static void AXSB_HandleSaveKind(NSString *kind) {
         AXSB_ShareAudioURL(AXSB_AudioURLFromAweme(aweme));
     } else if ([kind isEqualToString:@"image"]) {
         NSArray<NSURL *> *urls = AXSB_ImageURLsFromAweme(aweme);
-        NSURL *u = urls.count > 0 ? urls.firstObject : nil;
-        AXSB_SaveImageURL(u, @"图片");
+        AXSB_SaveImageURL(urls.count > 0 ? urls.firstObject : nil, @"图片");
     } else if ([kind isEqualToString:@"image_all"]) {
         NSArray<NSURL *> *urls = AXSB_ImageURLsFromAweme(aweme);
         if (urls.count == 0) { AXSB_Toast(@"图片链接为空"); return; }
@@ -1202,118 +1218,75 @@ static id AXSB_MakeAction(NSString *title, NSString *kind) {
     Class cls = NSClassFromString(@"AWEUserSheetAction");
     if (!cls) return nil;
 
-    void (^handler)(id) = ^(id action) { AXSB_HandleSaveKind(kind); };
-    UIImage *img = nil;
-    if (@available(iOS 13.0, *)) {
-        NSString *sys = [kind isEqualToString:@"video"] ? @"arrow.down.circle" :
-                        [kind isEqualToString:@"cover"] ? @"photo" :
-                        [kind isEqualToString:@"audio"] ? @"music.note" :
-                        [kind isEqualToString:@"copy_text"] ? @"doc.on.doc" : @"photo.on.rectangle";
-        img = [UIImage systemImageNamed:sys];
+    void (^handler0)(void) = ^{ AXSB_HandleSaveKind(kind); };
+
+    // DYYY 原文件使用的是 actionWithTitle:imgName:handler:，优先使用这个签名。
+    SEL s0 = NSSelectorFromString(@"actionWithTitle:imgName:handler:");
+    if ([cls respondsToSelector:s0]) {
+        return ((id (*)(id, SEL, id, id, id))objc_msgSend)(cls, s0, title, nil, handler0);
     }
 
-    SEL s1 = NSSelectorFromString(@"actionWithTitle:description:image:imageStyle:handler:");
+    SEL s1 = NSSelectorFromString(@"actionWithTitle:handler:");
     if ([cls respondsToSelector:s1]) {
-        return ((id (*)(id, SEL, id, id, id, NSInteger, id))objc_msgSend)(cls, s1, title, nil, img, 0, handler);
+        return ((id (*)(id, SEL, id, id))objc_msgSend)(cls, s1, title, handler0);
     }
 
     SEL s2 = NSSelectorFromString(@"actionWithTitle:image:handler:");
     if ([cls respondsToSelector:s2]) {
-        return ((id (*)(id, SEL, id, id, id))objc_msgSend)(cls, s2, title, img, handler);
+        return ((id (*)(id, SEL, id, id, id))objc_msgSend)(cls, s2, title, nil, handler0);
     }
 
-    SEL s3 = NSSelectorFromString(@"actionWithTitle:handler:");
+    SEL s3 = NSSelectorFromString(@"actionWithTitle:description:image:imageStyle:handler:");
     if ([cls respondsToSelector:s3]) {
-        return ((id (*)(id, SEL, id, id))objc_msgSend)(cls, s3, title, handler);
+        return ((id (*)(id, SEL, id, id, id, NSInteger, id))objc_msgSend)(cls, s3, title, nil, nil, 0, handler0);
     }
 
-    // 抖音/DYYY 常见构造方法：actionWithTitle:imgName:handler:
-    SEL s4 = NSSelectorFromString(@"actionWithTitle:imgName:handler:");
-    if ([cls respondsToSelector:s4]) {
-        return ((id (*)(id, SEL, id, id, id))objc_msgSend)(cls, s4, title, nil, handler);
-    }
     return nil;
 }
 
-static NSString *AXSB_ActionTitle(id action) {
-    id t = AXSB_Send0(action, @selector(title));
-    if (!t) t = AXSB_Send0(action, @selector(actionTitle));
-    if (!t) t = AXSB_Send0(action, @selector(text));
-    if (!t && [action respondsToSelector:@selector(valueForKey:)]) {
-        @try { t = [action valueForKey:@"title"]; } @catch (NSException *e) {}
-        if (!t) { @try { t = [action valueForKey:@"_title"]; } @catch (NSException *e) {} }
-        if (!t) { @try { t = [action valueForKey:@"name"]; } @catch (NSException *e) {} }
+static NSMutableArray *AXSB_BuildLongPressActions(void) {
+    NSMutableArray *actions = [NSMutableArray array];
+    NSArray *items = @[
+        @{ @"key": kAXLPPanelSaveVideo, @"def": @YES, @"title": @"保存视频", @"kind": @"video" },
+        @{ @"key": kAXLPPanelSaveCover, @"def": @YES, @"title": @"保存封面", @"kind": @"cover" },
+        @{ @"key": kAXLPPanelSaveAudio, @"def": @YES, @"title": @"保存音频", @"kind": @"audio" },
+        @{ @"key": kAXLPPanelSaveImage, @"def": @YES, @"title": @"保存图片", @"kind": @"image" },
+        @{ @"key": kAXLPPanelSaveAllImages, @"def": @YES, @"title": @"保存所有图片", @"kind": @"image_all" },
+        @{ @"key": kAXLPPanelCopyText, @"def": @NO, @"title": @"复制文案", @"kind": @"copy_text" }
+    ];
+    for (NSDictionary *item in items) {
+        if (!AXSB_Bool(item[@"key"], [item[@"def"] boolValue])) continue;
+        id action = AXSB_MakeAction(item[@"title"], item[@"kind"]);
+        if (action) [actions addObject:action];
     }
-    return [t isKindOfClass:NSString.class] ? (NSString *)t : nil;
+    return actions;
 }
 
-static BOOL AXSB_IsLikelyVideoLongPressActions(NSArray *actions, id sheet) {
-    if (![actions isKindOfClass:NSArray.class] || actions.count == 0) return NO;
+static BOOL AXSB_ShowLongPressPanel(id playVC) {
+    Class sheetCls = NSClassFromString(@"AWEUserActionSheetView");
+    if (!sheetCls) return NO;
 
-    // 不碰分享/评论等右侧入口弹层。它们也可能复用 AWEUserActionSheetView，
-    // V31 在这里追加保存按钮会导致“分享给/评论”内容空白。
-    NSArray *deny = @[@"分享", @"私信", @"朋友", @"微信", @"QQ", @"评论", @"回复", @"转发"];
-    NSArray *allow = @[@"不感兴趣", @"举报", @"清屏", @"倍速", @"保存", @"复制链接", @"一起看", @"稍后再看"];
-    BOOL hasAllow = NO;
-    NSInteger shareLikeCount = 0;
-    for (id a in actions) {
-        NSString *t = AXSB_ActionTitle(a) ?: @"";
-        for (NSString *d in deny) {
-            if ([t containsString:d]) shareLikeCount++;
-        }
-        for (NSString *ok in allow) {
-            if ([t containsString:ok]) hasAllow = YES;
-        }
-    }
-    // V36：部分 iPad 长按菜单标题取不到；只要不是明显分享/评论弹层，就允许注入。
-    if (shareLikeCount >= 2) return NO;
+    id aweme = AXSB_AwemeModelFromPlayVC(playVC);
+    if (aweme) axCurrentLongPressAweme = aweme;
 
-    if (sheet) {
-        NSString *sheetName = NSStringFromClass([sheet class]);
-        if ([sheetName containsString:@"Share"] || [sheetName containsString:@"Comment"] || [sheetName containsString:@"Input"] || [sheetName containsString:@"Keyboard"]) return NO;
-    }
-    if (hasAllow) return YES;
-    return actions.count <= 12;
+    NSMutableArray *actions = AXSB_BuildLongPressActions();
+    if (actions.count == 0) return NO;
+
+    id sheet = [[sheetCls alloc] init];
+    if (!sheet) return NO;
+
+    SEL setActions = @selector(setActions:);
+    SEL show = @selector(show);
+    if (![sheet respondsToSelector:setActions] || ![sheet respondsToSelector:show]) return NO;
+    ((void (*)(id, SEL, id))objc_msgSend)(sheet, setActions, actions);
+    ((void (*)(id, SEL))objc_msgSend)(sheet, show);
+    return YES;
 }
 
-static NSArray *AXSB_ActionsByAppendingSaveButtons(NSArray *actions, id sheet) {
-    if (![actions isKindOfClass:NSArray.class]) return actions;
-    if (!AXSB_IsLikelyVideoLongPressActions(actions, sheet)) return actions;
-
-    NSNumber *done = objc_getAssociatedObject(sheet, &kAXSaveButtonsInjectedKey);
-    if (done.boolValue) return actions;
-
-    NSMutableArray *titles = [NSMutableArray array];
-    NSMutableArray *kinds = [NSMutableArray array];
-    if (AXSB_Bool(kAXLPPanelSaveVideo, YES)) { [titles addObject:@"保存视频"]; [kinds addObject:@"video"]; }
-    if (AXSB_Bool(kAXLPPanelSaveCover, YES)) { [titles addObject:@"保存封面"]; [kinds addObject:@"cover"]; }
-    if (AXSB_Bool(kAXLPPanelSaveAudio, YES)) { [titles addObject:@"保存音频"]; [kinds addObject:@"audio"]; }
-    if (AXSB_Bool(kAXLPPanelSaveImage, YES)) { [titles addObject:@"保存图片"]; [kinds addObject:@"image"]; }
-    if (AXSB_Bool(kAXLPPanelSaveAllImages, YES)) { [titles addObject:@"保存所有图片"]; [kinds addObject:@"image_all"]; }
-    if (AXSB_Bool(kAXLPPanelCopyText, NO)) { [titles addObject:@"复制文案"]; [kinds addObject:@"copy_text"]; }
-    if (titles.count == 0) return actions;
-
-    NSMutableArray *m = [actions mutableCopy];
-    for (NSInteger i = 0; i < (NSInteger)titles.count; i++) {
-        BOOL exists = NO;
-        for (id a in m) {
-            NSString *t = AXSB_ActionTitle(a);
-            if ([t isEqualToString:titles[i]]) { exists = YES; break; }
-        }
-        if (!exists) {
-            id action = AXSB_MakeAction(titles[i], kinds[i]);
-            if (action) [m addObject:action];
-        }
-    }
-
-    objc_setAssociatedObject(sheet, &kAXSaveButtonsInjectedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    return m;
-}
-
-%hook AWEUserActionSheetView
-- (void)setActions:(NSArray *)actions {
-    NSArray *patched = AXSB_ActionsByAppendingSaveButtons(actions, self);
-    %orig(patched);
+%hook AWEPlayInteractionViewController
+- (void)showDislikeOnVideo {
+    if (AXSB_ShowLongPressPanel((id)self)) return;
+    %orig;
 }
 %end
 
