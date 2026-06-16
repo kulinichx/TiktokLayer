@@ -20,6 +20,7 @@ static UIScrollView *axPanelScroll = nil;
 static UIView *axLongPressOverlay = nil;
 static UIView *axLongPressPanel = nil;
 static NSArray *axLongPressCurrentItems = nil;
+static NSArray *axVideoSourceCurrentItems = nil;
 static id axNativeLongPressPlayVC = nil;
 static BOOL axOpeningNativeLongPress = NO;
 static BOOL axApplyingElementEffects = NO;
@@ -783,7 +784,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     [aboutCard addSubview:versionTitle];
 
     UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
-    versionValue.text = @"V47";
+    versionValue.text = @"V48";
     versionValue.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.72];
     versionValue.font = [UIFont boldSystemFontOfSize:14];
     versionValue.textAlignment = NSTextAlignmentRight;
@@ -898,7 +899,7 @@ static void AXReloadSettingsContent(BOOL animated) {
 }
 
 - (void)showUpdateLog {
-    AXSB_Toast(@"V47：优化 iPad 设置面板尺寸与信息区；保存结果改为相册回调确认。");
+    AXSB_Toast(@"V48：保存视频增加清晰度/来源选择；接口解析保留为后续可配置项。");
 }
 
 - (void)openSettings {
@@ -1104,6 +1105,7 @@ static id axCurrentLongPressAweme = nil;
 - (void)closeLongPressPanel;
 - (void)actionTapped:(UIButton *)sender;
 - (void)openNativeLongPressPanel;
+- (void)videoSourceTapped:(UIButton *)sender;
 - (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error contextInfo:(void *)contextInfo;
 - (void)video:(NSString *)videoPath didFinishSavingWithError:(NSError *)error contextInfo:(void *)contextInfo;
 @end
@@ -1130,6 +1132,29 @@ static BOOL AXSB_StrHasHTTP(NSString *s) {
 static NSURL *AXSB_URLFromString(NSString *s) {
     if (!AXSB_StrHasHTTP(s)) return nil;
     return [NSURL URLWithString:s];
+}
+
+
+static NSString *AXSB_StringBySelectors(id obj, NSArray<NSString *> *sels) {
+    if (!obj) return nil;
+    for (NSString *name in sels) {
+        id v = AXSB_Send0(obj, NSSelectorFromString(name));
+        if ([v isKindOfClass:NSString.class] && [(NSString *)v length] > 0) return v;
+        if ([v respondsToSelector:@selector(stringValue)]) {
+            NSString *s = [v stringValue];
+            if (s.length > 0) return s;
+        }
+    }
+    return nil;
+}
+
+static NSArray *AXSB_ArrayBySelectors(id obj, NSArray<NSString *> *sels) {
+    if (!obj) return nil;
+    for (NSString *name in sels) {
+        id v = AXSB_Send0(obj, NSSelectorFromString(name));
+        if ([v isKindOfClass:NSArray.class]) return v;
+    }
+    return nil;
 }
 
 static NSURL *AXSB_FirstURLInObject(id obj, NSInteger depth);
@@ -1296,6 +1321,134 @@ static void AXSB_Toast(NSString *text) {
     });
 }
 
+
+static UIButton *AXSB_MakePanelButton(NSString *title, NSInteger tag, CGRect frame);
+static void AXSB_SaveVideoURL(NSURL *url);
+
+static void AXSB_AddVideoSource(NSMutableArray<NSDictionary *> *items, NSString *title, NSURL *url) {
+    if (!url || title.length == 0) return;
+    NSString *abs = url.absoluteString;
+    if (abs.length == 0) return;
+    for (NSDictionary *it in items) {
+        NSURL *old = it[@"url"];
+        if ([old.absoluteString isEqualToString:abs]) return;
+    }
+    [items addObject:@{ @"title": title, @"url": url }];
+}
+
+static NSURL *AXSB_URLFromURLModel(id obj) {
+    if (!obj) return nil;
+    NSURL *u = AXSB_FirstURLBySelectors(obj, @[@"originURLList", @"urlList", @"URLList", @"url_list", @"urls"], 5);
+    if (u) return u;
+    return AXSB_FirstURLInObject(obj, 4);
+}
+
+static NSArray<NSDictionary *> *AXSB_VideoSourcesFromAweme(id aweme) {
+    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
+    if (!aweme) return items;
+    id video = AXSB_Send0(aweme, @selector(video));
+    id target = video ?: aweme;
+
+    NSArray *bitRates = AXSB_ArrayBySelectors(target, @[@"bitRate", @"bitRates", @"bitrate", @"bitrateModels", @"playBitrateModels"]);
+    if ([bitRates isKindOfClass:NSArray.class]) {
+        NSInteger idx = 1;
+        for (id br in bitRates) {
+            NSURL *u = AXSB_FirstURLBySelectors(br, @[@"playAddr", @"playURL", @"playUrl", @"downloadAddr", @"urlModel", @"urlList"], 5);
+            if (!u) u = AXSB_FirstURLInObject(br, 4);
+            NSString *quality = AXSB_StringBySelectors(br, @[@"gearName", @"qualityType", @"qualityDesc", @"quality", @"definition", @"name"]);
+            NSString *title = quality.length > 0 ? [NSString stringWithFormat:@"%@源", quality] : [NSString stringWithFormat:@"清晰度源 %ld", (long)idx];
+            AXSB_AddVideoSource(items, title, u);
+            idx++;
+        }
+    }
+
+    id h264 = AXSB_Send0(target, @selector(h264URL));
+    AXSB_AddVideoSource(items, @"高清 H264", AXSB_URLFromURLModel(h264));
+
+    id play = AXSB_Send0(target, @selector(playURL));
+    AXSB_AddVideoSource(items, @"播放地址", AXSB_URLFromURLModel(play));
+
+    id playAddr = AXSB_Send0(target, @selector(playAddr));
+    AXSB_AddVideoSource(items, @"播放源", AXSB_URLFromURLModel(playAddr));
+
+    id download = AXSB_Send0(target, @selector(downloadAddr));
+    AXSB_AddVideoSource(items, @"下载地址", AXSB_URLFromURLModel(download));
+
+    NSURL *fallback = AXSB_FirstURLInObject(target, 5);
+    AXSB_AddVideoSource(items, @"备用源", fallback);
+    return items;
+}
+
+static void AXSB_ShowVideoSourcePanelForAweme(id aweme) {
+    NSArray<NSDictionary *> *sources = AXSB_VideoSourcesFromAweme(aweme);
+    if (sources.count == 0) { AXSB_Toast(@"视频链接为空"); return; }
+    if (sources.count == 1) { AXSB_SaveVideoURL(sources.firstObject[@"url"]); return; }
+
+    axVideoSourceCurrentItems = sources;
+    UIWindow *w = AXSB_KeyWindow();
+    if (!w) return;
+    CGRect b = w.bounds;
+
+    UIView *overlay = [[UIView alloc] initWithFrame:b];
+    overlay.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.08];
+    overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    overlay.alpha = 0;
+    overlay.layer.zPosition = CGFLOAT_MAX;
+    [w addSubview:overlay];
+    axLongPressOverlay = overlay;
+
+    UIButton *dismiss = [UIButton buttonWithType:UIButtonTypeCustom];
+    dismiss.frame = overlay.bounds;
+    dismiss.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [dismiss addTarget:[AXLongPressPanelTarget shared] action:@selector(closeLongPressPanel) forControlEvents:UIControlEventTouchUpInside];
+    [overlay addSubview:dismiss];
+
+    CGFloat panelW = MIN(500.0, MAX(320.0, b.size.width - 96.0));
+    CGFloat rowH = 50.0;
+    CGFloat contentH = 76.0 + sources.count * (rowH + 10.0) + 20.0;
+    CGFloat panelH = MIN(contentH, b.size.height * 0.64);
+    UIView *panel = [[UIView alloc] initWithFrame:CGRectMake((b.size.width - panelW) / 2.0, (b.size.height - panelH) / 2.0, panelW, panelH)];
+    panel.backgroundColor = [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.90];
+    panel.layer.cornerRadius = 22;
+    panel.layer.masksToBounds = YES;
+    [overlay addSubview:panel];
+    axLongPressPanel = panel;
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(24, 18, panelW - 90, 34)];
+    title.text = @"选择视频源";
+    title.textColor = UIColor.whiteColor;
+    title.font = [UIFont boldSystemFontOfSize:20];
+    [panel addSubview:title];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
+    close.frame = CGRectMake(panelW - 58, 16, 40, 40);
+    [close setTitle:@"×" forState:UIControlStateNormal];
+    [close setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont boldSystemFontOfSize:30];
+    [close addTarget:[AXLongPressPanelTarget shared] action:@selector(closeLongPressPanel) forControlEvents:UIControlEventTouchUpInside];
+    [panel addSubview:close];
+
+    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 66, panelW, panelH - 66)];
+    scroll.showsVerticalScrollIndicator = YES;
+    [panel addSubview:scroll];
+
+    CGFloat y = 4.0;
+    for (NSInteger i = 0; i < (NSInteger)sources.count; i++) {
+        UIButton *btn = AXSB_MakePanelButton(sources[i][@"title"], i, CGRectMake(24, y, panelW - 48, rowH));
+        btn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+        [btn addTarget:[AXLongPressPanelTarget shared] action:@selector(videoSourceTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [scroll addSubview:btn];
+        y += rowH + 10.0;
+    }
+    scroll.contentSize = CGSizeMake(panelW, MAX(y, scroll.bounds.size.height + 1.0));
+
+    panel.transform = CGAffineTransformMakeScale(0.96, 0.96);
+    [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{
+        overlay.alpha = 1;
+        panel.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
 static void AXSB_SaveImageURL(NSURL *url, NSString *name) {
     if (!url) { AXSB_Toast([NSString stringWithFormat:@"%@链接为空", name]); return; }
     AXSB_Toast([NSString stringWithFormat:@"正在保存%@…", name]);
@@ -1348,7 +1501,7 @@ static void AXSB_HandleSaveKind(NSString *kind) {
     id aweme = AXSB_CurrentAwemeModel();
     if (!aweme) { AXSB_Toast(@"未找到当前作品模型"); return; }
     if ([kind isEqualToString:@"video"]) {
-        AXSB_SaveVideoURL(AXSB_VideoURLFromAweme(aweme));
+        AXSB_ShowVideoSourcePanelForAweme(aweme);
     } else if ([kind isEqualToString:@"cover"]) {
         AXSB_SaveImageURL(AXSB_CoverURLFromAweme(aweme), @"封面");
     } else if ([kind isEqualToString:@"audio"]) {
@@ -1428,6 +1581,7 @@ static void AXSB_CloseLongPressPanel(void) {
     axLongPressOverlay = nil;
     axLongPressPanel = nil;
     axLongPressCurrentItems = nil;
+    axVideoSourceCurrentItems = nil;
     axNativeLongPressPlayVC = nil;
     if (!overlay) return;
     [UIView animateWithDuration:0.16 animations:^{
@@ -1564,6 +1718,15 @@ static void AXSB_ShowCustomLongPressPanelForAweme(id aweme, id playVC) {
     NSString *kind = item[@"kind"];
     AXSB_CloseLongPressPanel();
     AXSB_HandleSaveKind(kind);
+}
+
+- (void)videoSourceTapped:(UIButton *)sender {
+    NSInteger idx = sender.tag;
+    if (idx < 0 || idx >= (NSInteger)axVideoSourceCurrentItems.count) return;
+    NSDictionary *item = axVideoSourceCurrentItems[idx];
+    NSURL *url = item[@"url"];
+    AXSB_CloseLongPressPanel();
+    AXSB_SaveVideoURL(url);
 }
 
 - (void)openNativeLongPressPanel {
