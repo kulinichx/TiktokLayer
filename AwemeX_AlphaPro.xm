@@ -51,38 +51,46 @@ static CGFloat TLEffectiveAlpha(CGFloat baseAlpha, CGFloat factor) {
     return finalAlpha;
 }
 
-static void TLSetAlphaWithoutRebase(UIView *view, CGFloat alpha) {
+static void TLSetAlphaWithoutRebase(id view, CGFloat alpha) {
+    if (!view || ![view isKindOfClass:[UIView class]]) return;
+    UIView *targetView = (UIView *)view;
     TLAlphaMutationDepth++;
-    view.alpha = alpha;
+    targetView.alpha = alpha;
     TLAlphaMutationDepth--;
 }
 
-static void TLApplyGlobalAlpha(UIView *view) {
-    if (!view || !TLIsIpad() || !view.window) return;
+static void TLApplyGlobalAlpha(id view) {
+    if (!view || ![view isKindOfClass:[UIView class]]) return;
+    UIView *targetView = (UIView *)view;
+    if (!TLIsIpad() || !targetView.window) return;
     TLLoadPrefsIfNeeded(NO);
-    NSNumber *stored = objc_getAssociatedObject(view, &TLBaseAlphaKey);
-    CGFloat baseAlpha = stored ? stored.floatValue : view.alpha;
+    NSNumber *stored = objc_getAssociatedObject(targetView, &TLBaseAlphaKey);
+    CGFloat baseAlpha = stored ? stored.floatValue : targetView.alpha;
     if (!stored) {
-        objc_setAssociatedObject(view, &TLBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(targetView, &TLBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     CGFloat finalAlpha = TLEffectiveAlpha(baseAlpha, TLGlobalAlpha);
-    if (fabs(view.alpha - finalAlpha) >= 0.001) {
-        TLSetAlphaWithoutRebase(view, finalAlpha);
+    if (fabs(targetView.alpha - finalAlpha) >= 0.001) {
+        TLSetAlphaWithoutRebase(targetView, finalAlpha);
     }
 }
 
-static CGFloat TLAlphaForStackView(UIView *view, CGFloat alpha) {
+static CGFloat TLAlphaForStackView(id view, CGFloat alpha) {
+    if (!view || ![view isKindOfClass:[UIView class]]) return alpha;
+    UIView *targetView = (UIView *)view;
     if (!TLIsIpad() || TLAlphaMutationDepth > 0) return alpha;
     TLLoadPrefsIfNeeded(NO);
     CGFloat baseAlpha = TLClampAlpha(alpha);
-    objc_setAssociatedObject(view, &TLBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(targetView, &TLBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return TLEffectiveAlpha(baseAlpha, TLGlobalAlpha);
 }
 
-static void TLDelayedApplyGlobalAlpha(UIView *view) {
-    if (!view || !view.window || !TLIsIpad()) return;
-    TLApplyGlobalAlpha(view);
-    __weak UIView *weakView = view;
+static void TLDelayedApplyGlobalAlpha(id view) {
+    if (!view || ![view isKindOfClass:[UIView class]]) return;
+    UIView *targetView = (UIView *)view;
+    if (!targetView.window || !TLIsIpad()) return;
+    TLApplyGlobalAlpha(targetView);
+    __weak UIView *weakView = targetView;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         TLApplyGlobalAlpha(weakView);
     });
@@ -106,7 +114,11 @@ static void TLDelayedApplyGlobalAlpha(UIView *view) {
         return;
     }
     TLLoadPrefsIfNeeded(NO);
-    %orig(TLEffectiveAlpha(1.0, TLTopBarAlpha));
+    if (TLTopBarAlpha == TLInvalidAlpha) {
+        %orig(alpha);
+    } else {
+        %orig(TLEffectiveAlpha(alpha, TLTopBarAlpha));
+    }
 }
 %end
 
@@ -125,7 +137,8 @@ static void TLDelayedApplyGlobalAlpha(UIView *view) {
 - (void)layoutSubviews {
     %orig;
     if (!TLIsIpad()) return;
-    if ([self.superview isKindOfClass:NSClassFromString(@"AWEPlayInteractionFollowPromptView")]) {
+    UIView *targetView = [self isKindOfClass:[UIView class]] ? (UIView *)self : nil;
+    if (targetView && [targetView.superview isKindOfClass:NSClassFromString(@"AWEPlayInteractionFollowPromptView")]) {
         TLLoadPrefsIfNeeded(NO);
         if (TLAvatarAlpha != TLInvalidAlpha) {
             TLSetAlphaWithoutRebase(self, TLEffectiveAlpha(1.0, TLAvatarAlpha));
