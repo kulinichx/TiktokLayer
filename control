@@ -1,6 +1,6 @@
 Package: com.kulinichx.tiktoklayer
 Name: TiktokLayer
-Version: 1.0.2
+Version: 1.0.3
 Architecture: iphoneos-arm64
 Description: iPad layer UI adjustment for Douyin/Aweme.
 Maintainer: kulinichx

@@ -8,7 +8,10 @@ static const CGFloat TLMinVisibleAlpha = 0.011;
 static NSString *const TLGlobalTransparencyKey = @"DYYYGlobalTransparency";
 static NSString *const TLTopBarTransparencyKey = @"DYYYTopBarTransparent";
 static NSString *const TLAvatarTransparencyKey = @"DYYYAvatarViewTransparency";
+static NSString *const TLDisableSettingsGestureKey = @"DYYYDisableSettingsGesture";
+
 static char TLBaseAlphaKey;
+static char TLSettingsGestureKey;
 static NSInteger TLAlphaMutationDepth = 0;
 static CFTimeInterval TLLastPrefsRead = 0;
 static CGFloat TLGlobalAlpha = TLInvalidAlpha;
@@ -24,6 +27,11 @@ static inline CGFloat TLClampAlpha(CGFloat value) {
     if (value < 0.0) return 0.0;
     if (value > 1.0) return 1.0;
     return value;
+}
+
+static BOOL TLBoolForKey(NSString *key) {
+    id raw = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    return raw ? [raw boolValue] : NO;
 }
 
 static CGFloat TLReadAlphaForKey(NSString *key) {
@@ -64,11 +72,13 @@ static void TLApplyGlobalAlpha(id view) {
     UIView *targetView = (UIView *)view;
     if (!TLIsIpad() || !targetView.window) return;
     TLLoadPrefsIfNeeded(NO);
+
     NSNumber *stored = objc_getAssociatedObject(targetView, &TLBaseAlphaKey);
     CGFloat baseAlpha = stored ? stored.floatValue : targetView.alpha;
     if (!stored) {
         objc_setAssociatedObject(targetView, &TLBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
+
     CGFloat finalAlpha = TLEffectiveAlpha(baseAlpha, TLGlobalAlpha);
     if (fabs(targetView.alpha - finalAlpha) >= 0.001) {
         TLSetAlphaWithoutRebase(targetView, finalAlpha);
@@ -80,6 +90,7 @@ static CGFloat TLAlphaForStackView(id view, CGFloat alpha) {
     UIView *targetView = (UIView *)view;
     if (!TLIsIpad() || TLAlphaMutationDepth > 0) return alpha;
     TLLoadPrefsIfNeeded(NO);
+
     CGFloat baseAlpha = TLClampAlpha(alpha);
     objc_setAssociatedObject(targetView, &TLBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return TLEffectiveAlpha(baseAlpha, TLGlobalAlpha);
@@ -89,6 +100,7 @@ static void TLDelayedApplyGlobalAlpha(id view) {
     if (!view || ![view isKindOfClass:[UIView class]]) return;
     UIView *targetView = (UIView *)view;
     if (!targetView.window || !TLIsIpad()) return;
+
     TLApplyGlobalAlpha(targetView);
     __weak UIView *weakView = targetView;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -99,6 +111,112 @@ static void TLDelayedApplyGlobalAlpha(id view) {
     });
 }
 
+static UIViewController *TLTopMostViewController(UIViewController *rootViewController) {
+    UIViewController *topViewController = rootViewController;
+    while (topViewController.presentedViewController) {
+        topViewController = topViewController.presentedViewController;
+    }
+
+    if ([topViewController isKindOfClass:[UINavigationController class]]) {
+        return TLTopMostViewController(((UINavigationController *)topViewController).visibleViewController);
+    }
+
+    if ([topViewController isKindOfClass:[UITabBarController class]]) {
+        return TLTopMostViewController(((UITabBarController *)topViewController).selectedViewController);
+    }
+
+    return topViewController;
+}
+
+static void TLPresentMissingSettingsAlert(UIWindow *window) {
+    UIViewController *presenter = TLTopMostViewController(window.rootViewController);
+    if (!presenter) return;
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"TiktokLayer"
+                                                                   message:@"未找到 DYYYSettingViewController。请确认原 DYYY 设置模块已随插件加载。"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
+    [presenter presentViewController:alert animated:YES completion:nil];
+}
+
+static void TLInstallSettingsGesture(UIWindow *window) {
+    if (!window || TLBoolForKey(TLDisableSettingsGestureKey)) return;
+    if (objc_getAssociatedObject(window, &TLSettingsGestureKey)) return;
+
+    UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc] initWithTarget:window action:@selector(tl_handleDoubleFingerLongPressGesture:)];
+    gesture.numberOfTouchesRequired = 2;
+    gesture.minimumPressDuration = 0.5;
+    gesture.cancelsTouchesInView = NO;
+    [window addGestureRecognizer:gesture];
+    objc_setAssociatedObject(window, &TLSettingsGestureKey, gesture, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+%group TLSettingsGesture
+%hook UIWindow
+- (instancetype)initWithFrame:(CGRect)frame {
+    UIWindow *window = %orig(frame);
+    TLInstallSettingsGesture(window);
+    return window;
+}
+
+- (void)makeKeyAndVisible {
+    %orig;
+    TLInstallSettingsGesture(self);
+}
+
+%new
+- (void)tl_handleDoubleFingerLongPressGesture:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    if (TLBoolForKey(TLDisableSettingsGestureKey)) return;
+
+    UIWindow *window = (UIWindow *)self;
+    UIViewController *presenter = TLTopMostViewController(window.rootViewController);
+    if (!presenter) return;
+    if (presenter.presentedViewController) return;
+
+    Class settingClass = NSClassFromString(@"DYYYSettingViewController");
+    if (!settingClass) {
+        TLPresentMissingSettingsAlert(window);
+        return;
+    }
+
+    UIViewController *settingVC = [[settingClass alloc] init];
+    if (![settingVC isKindOfClass:[UIViewController class]]) return;
+
+    BOOL isPad = TLIsIpad();
+    if (@available(iOS 15.0, *)) {
+        settingVC.modalPresentationStyle = isPad ? UIModalPresentationFullScreen : UIModalPresentationPageSheet;
+    } else {
+        settingVC.modalPresentationStyle = UIModalPresentationFullScreen;
+    }
+
+    [settingVC loadViewIfNeeded];
+
+    if (settingVC.modalPresentationStyle == UIModalPresentationFullScreen) {
+        UIButton *closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        [closeButton setTitle:@"关闭" forState:UIControlStateNormal];
+        closeButton.translatesAutoresizingMaskIntoConstraints = NO;
+        [closeButton addTarget:self action:@selector(tl_closeSettings:) forControlEvents:UIControlEventTouchUpInside];
+        [settingVC.view addSubview:closeButton];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [closeButton.trailingAnchor constraintEqualToAnchor:settingVC.view.safeAreaLayoutGuide.trailingAnchor constant:-10.0],
+            [closeButton.topAnchor constraintEqualToAnchor:settingVC.view.safeAreaLayoutGuide.topAnchor constant:8.0],
+            [closeButton.widthAnchor constraintEqualToConstant:80.0],
+            [closeButton.heightAnchor constraintEqualToConstant:40.0]
+        ]];
+    }
+
+    [presenter presentViewController:settingVC animated:YES completion:nil];
+}
+
+%new
+- (void)tl_closeSettings:(UIButton *)button {
+    [button.window.rootViewController dismissViewControllerAnimated:YES completion:nil];
+}
+%end
+%end
+
 %hook AWEFeedTopBarContainer
 - (void)didMoveToSuperview {
     %orig;
@@ -108,6 +226,7 @@ static void TLDelayedApplyGlobalAlpha(id view) {
         TLSetAlphaWithoutRebase(self, TLEffectiveAlpha(1.0, TLTopBarAlpha));
     }
 }
+
 - (void)setAlpha:(CGFloat)alpha {
     if (!TLIsIpad() || TLAlphaMutationDepth > 0) {
         %orig(alpha);
@@ -137,6 +256,7 @@ static void TLDelayedApplyGlobalAlpha(id view) {
 - (void)layoutSubviews {
     %orig;
     if (!TLIsIpad()) return;
+
     UIView *targetView = [(id)self isKindOfClass:[UIView class]] ? (UIView *)(id)self : nil;
     if (targetView && [targetView.superview isKindOfClass:NSClassFromString(@"AWEPlayInteractionFollowPromptView")]) {
         TLLoadPrefsIfNeeded(NO);
@@ -151,6 +271,7 @@ static void TLDelayedApplyGlobalAlpha(id view) {
 - (void)setAlpha:(CGFloat)alpha {
     %orig(TLAlphaForStackView(self, alpha));
 }
+
 - (void)didMoveToWindow {
     %orig;
     TLDelayedApplyGlobalAlpha(self);
@@ -161,6 +282,7 @@ static void TLDelayedApplyGlobalAlpha(id view) {
 - (void)setAlpha:(CGFloat)alpha {
     %orig(TLAlphaForStackView(self, alpha));
 }
+
 - (void)didMoveToWindow {
     %orig;
     TLDelayedApplyGlobalAlpha(self);
@@ -171,6 +293,7 @@ static void TLDelayedApplyGlobalAlpha(id view) {
 - (void)setAlpha:(CGFloat)alpha {
     %orig(TLAlphaForStackView(self, alpha));
 }
+
 - (void)didMoveToWindow {
     %orig;
     TLDelayedApplyGlobalAlpha(self);
@@ -179,6 +302,9 @@ static void TLDelayedApplyGlobalAlpha(id view) {
 
 %ctor {
     TLLoadPrefsIfNeeded(YES);
+    %init;
+    %init(TLSettingsGesture);
+
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
