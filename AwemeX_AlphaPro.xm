@@ -45,6 +45,17 @@ static void AXSet(NSString *key, id value) {
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
+// 拖动滑块时只写入内存，避免每一帧 synchronize 导致设置面板卡顿。
+static void AXSetFast(NSString *key, id value) {
+    if (!key) return;
+    [[NSUserDefaults standardUserDefaults] setObject:value forKey:key];
+}
+
+// 松手或切换开关后再统一落盘。
+static void AXSyncPrefs(void) {
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
 static CGFloat AXClamp01(CGFloat v) {
     return MIN(MAX(v, 0.0), 1.0);
 }
