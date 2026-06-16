@@ -17,6 +17,11 @@ static UIButton *axButton = nil;
 static UIView *axPanel = nil;
 static UIView *axPanelContent = nil;
 static UIScrollView *axPanelScroll = nil;
+static UIView *axLongPressOverlay = nil;
+static UIView *axLongPressPanel = nil;
+static NSArray *axLongPressCurrentItems = nil;
+static id axNativeLongPressPlayVC = nil;
+static BOOL axOpeningNativeLongPress = NO;
 static BOOL axApplyingElementEffects = NO;
 static BOOL axSettingAlpha = NO;
 static BOOL axMainRefreshScheduled = NO;
@@ -102,7 +107,7 @@ static BOOL AXIsDescendantOf(UIView *v, UIView *ancestor) {
 }
 
 static BOOL AXIsAwemeXPanelView(UIView *v) {
-    return AXIsDescendantOf(v, axPanel) || AXIsDescendantOf(v, axButton);
+    return AXIsDescendantOf(v, axPanel) || AXIsDescendantOf(v, axButton) || AXIsDescendantOf(v, axLongPressOverlay) || AXIsDescendantOf(v, axLongPressPanel);
 }
 
 static NSHashTable *AXTrackedElementViews(void) {
@@ -759,23 +764,16 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
 }
 
 static void AXReloadSettingsContent(BOOL animated) {
+    (void)animated;
     if (!axPanel || !axPanelContent || !axPanelScroll) return;
     CGFloat width = axPanelScroll.bounds.size.width;
     CGPoint oldOffset = axPanelScroll.contentOffset;
-    void (^reloadBlock)(void) = ^{
+    [UIView performWithoutAnimation:^{
         AXBuildSettingsContent(axPanelScroll, width);
         CGFloat maxY = MAX(0.0, axPanelScroll.contentSize.height - axPanelScroll.bounds.size.height);
         axPanelScroll.contentOffset = CGPointMake(oldOffset.x, MIN(oldOffset.y, maxY));
-    };
-    if (animated) {
-        [UIView transitionWithView:axPanelContent
-                          duration:0.18
-                           options:UIViewAnimationOptionTransitionCrossDissolve | UIViewAnimationOptionAllowUserInteraction
-                        animations:reloadBlock
-                        completion:nil];
-    } else {
-        reloadBlock();
-    }
+        [axPanelContent layoutIfNeeded];
+    }];
 }
 
 @implementation AXMenuTarget
@@ -1030,11 +1028,18 @@ static void AXShow(void) {
 %end
 
 
-// AwemeX iPad 单指长按菜单：按 DYYY 设计追加到抖音原生长按面板。
-// 不再安装额外单指长按手势，避免出现“原生面板 + 新面板”叠加。
+// AwemeX iPad 单指长按菜单：成熟稳定方案。
+// 设计原则：不额外安装单指长按手势，不叠加原生面板；直接拦截抖音长按入口，显示 AwemeX 自己的轻量面板。
+// 面板内容按当前作品类型自动区分：视频只显示视频/封面/音频相关，图集只显示图片相关；不包含“生成视频/制作视频”。
 
 static id axCurrentLongPressAweme = nil;
-static NSTimeInterval axCurrentLongPressAwemeTime = 0;
+
+@interface AXLongPressPanelTarget : NSObject
++ (instancetype)shared;
+- (void)closeLongPressPanel;
+- (void)actionTapped:(UIButton *)sender;
+- (void)openNativeLongPressPanel;
+@end
 
 static BOOL AXSB_Bool(NSString *key, BOOL def) {
     id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
@@ -1145,8 +1150,7 @@ static id AXSB_AwemeModelFromPlayVC(id playVC) {
 }
 
 static id AXSB_CurrentAwemeModel(void) {
-    if (axCurrentLongPressAweme) return axCurrentLongPressAweme;
-    return nil;
+    return axCurrentLongPressAweme;
 }
 
 static NSURL *AXSB_VideoURLFromAweme(id aweme) {
@@ -1171,45 +1175,52 @@ static NSURL *AXSB_AudioURLFromAweme(id aweme) {
 
 static NSArray<NSURL *> *AXSB_ImageURLsFromAweme(id aweme) {
     if (!aweme) return @[];
-    NSMutableArray<NSURL *> *out = [NSMutableArray array];
-    NSArray *containers = @[
+    NSMutableArray<NSURL *> *urls = [NSMutableArray array];
+    NSArray *candidates = @[
+        AXSB_Send0(aweme, @selector(albumImages)) ?: [NSNull null],
         AXSB_Send0(aweme, @selector(images)) ?: [NSNull null],
         AXSB_Send0(aweme, @selector(imageInfos)) ?: [NSNull null],
-        AXSB_Send0(aweme, @selector(albumImages)) ?: [NSNull null],
         AXSB_Send0(aweme, @selector(imageAlbum)) ?: [NSNull null],
         AXSB_Send0(aweme, @selector(imagePostInfo)) ?: [NSNull null]
     ];
-    for (id c in containers) {
-        if (!c || c == (id)NSNull.null) continue;
+    for (id c in candidates) {
+        if (c == (id)[NSNull null]) continue;
         if ([c isKindOfClass:NSArray.class]) {
             for (id item in (NSArray *)c) {
                 NSURL *u = AXSB_FirstURLInObject(item, 6);
-                if (u && ![out containsObject:u]) [out addObject:u];
+                if (u && ![urls containsObject:u]) [urls addObject:u];
             }
         } else {
             NSURL *u = AXSB_FirstURLInObject(c, 6);
-            if (u && ![out containsObject:u]) [out addObject:u];
+            if (u && ![urls containsObject:u]) [urls addObject:u];
         }
     }
-    return out;
+    return urls;
 }
 
 static void AXSB_Toast(NSString *text) {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *w = AXSB_KeyWindow();
         if (!w) return;
-        UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 260, 44)];
-        l.center = CGPointMake(CGRectGetMidX(w.bounds), CGRectGetMidY(w.bounds));
-        l.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.78];
+        UILabel *l = [[UILabel alloc] initWithFrame:CGRectZero];
+        l.text = text ?: @"";
         l.textColor = UIColor.whiteColor;
         l.font = [UIFont boldSystemFontOfSize:14];
         l.textAlignment = NSTextAlignmentCenter;
-        l.text = text;
-        l.layer.cornerRadius = 12;
+        l.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.72];
+        l.layer.cornerRadius = 10;
         l.clipsToBounds = YES;
+        CGSize size = [l sizeThatFits:CGSizeMake(360, 40)];
+        CGFloat width = MIN(MAX(size.width + 28, 130), w.bounds.size.width - 60);
+        l.frame = CGRectMake((w.bounds.size.width - width) / 2.0, w.bounds.size.height * 0.18, width, 40);
+        l.alpha = 0;
         l.layer.zPosition = CGFLOAT_MAX;
         [w addSubview:l];
-        [UIView animateWithDuration:0.25 delay:1.15 options:0 animations:^{ l.alpha = 0; } completion:^(BOOL finished) { [l removeFromSuperview]; }];
+        [UIView animateWithDuration:0.18 animations:^{ l.alpha = 1; } completion:^(BOOL finished) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [UIView animateWithDuration:0.18 animations:^{ l.alpha = 0; } completion:^(BOOL done) { [l removeFromSuperview]; }];
+            });
+        }];
     });
 }
 
@@ -1264,7 +1275,7 @@ static void AXSB_ShareAudioURL(NSURL *url) {
 
 static void AXSB_HandleSaveKind(NSString *kind) {
     id aweme = AXSB_CurrentAwemeModel();
-    if (!aweme) { AXSB_Toast(@"未找到当前视频模型"); return; }
+    if (!aweme) { AXSB_Toast(@"未找到当前作品模型"); return; }
     if ([kind isEqualToString:@"video"]) {
         AXSB_SaveVideoURL(AXSB_VideoURLFromAweme(aweme));
     } else if ([kind isEqualToString:@"cover"]) {
@@ -1295,37 +1306,6 @@ static void AXSB_HandleSaveKind(NSString *kind) {
     }
 }
 
-static id AXSB_MakeAction(NSString *title, NSString *kind) {
-    Class cls = NSClassFromString(@"AWEUserSheetAction");
-    if (!cls) return nil;
-
-    void (^handler0)(void) = ^{ AXSB_HandleSaveKind(kind); };
-
-    // DYYY 原文件使用的是 actionWithTitle:imgName:handler:，优先使用这个签名。
-    SEL s0 = NSSelectorFromString(@"actionWithTitle:imgName:handler:");
-    if ([cls respondsToSelector:s0]) {
-        return ((id (*)(id, SEL, id, id, id))objc_msgSend)(cls, s0, title, nil, handler0);
-    }
-
-    SEL s1 = NSSelectorFromString(@"actionWithTitle:handler:");
-    if ([cls respondsToSelector:s1]) {
-        return ((id (*)(id, SEL, id, id))objc_msgSend)(cls, s1, title, handler0);
-    }
-
-    SEL s2 = NSSelectorFromString(@"actionWithTitle:image:handler:");
-    if ([cls respondsToSelector:s2]) {
-        return ((id (*)(id, SEL, id, id, id))objc_msgSend)(cls, s2, title, nil, handler0);
-    }
-
-    SEL s3 = NSSelectorFromString(@"actionWithTitle:description:image:imageStyle:handler:");
-    if ([cls respondsToSelector:s3]) {
-        return ((id (*)(id, SEL, id, id, id, NSInteger, id))objc_msgSend)(cls, s3, title, nil, nil, 0, handler0);
-    }
-
-    return nil;
-}
-
-
 static NSInteger AXSB_AwemeContentType(id aweme) {
     if (!aweme) return 0;
     NSArray<NSURL *> *imgs = AXSB_ImageURLsFromAweme(aweme);
@@ -1342,83 +1322,193 @@ static NSInteger AXSB_AwemeContentType(id aweme) {
     return 2; // 视频/其它按视频处理
 }
 
-static NSMutableArray *AXSB_BuildLongPressActionsForAweme(id aweme) {
-    NSMutableArray *actions = [NSMutableArray array];
+static NSArray<NSDictionary *> *AXSB_BuildLongPressItemsForAweme(id aweme) {
+    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
     NSInteger contentType = AXSB_AwemeContentType(aweme);
     BOOL isImage = (contentType == 1);
-    BOOL isVideo = !isImage;
 
-    NSMutableArray *items = [NSMutableArray array];
-    if (isVideo) {
-        [items addObject:@{ @"key": kAXLPPanelSaveVideo, @"def": @YES, @"title": @"保存视频", @"kind": @"video" }];
-        [items addObject:@{ @"key": kAXLPPanelSaveCover, @"def": @YES, @"title": @"保存封面", @"kind": @"cover" }];
-        [items addObject:@{ @"key": kAXLPPanelSaveAudio, @"def": @YES, @"title": @"保存音频", @"kind": @"audio" }];
+    if (isImage) {
+        if (AXSB_Bool(kAXLPPanelSaveImage, YES)) {
+            [items addObject:@{ @"title": @"保存图片", @"kind": @"image" }];
+        }
+        if (AXSB_ImageURLsFromAweme(aweme).count > 1 && AXSB_Bool(kAXLPPanelSaveAllImages, YES)) {
+            [items addObject:@{ @"title": @"保存所有图片", @"kind": @"image_all" }];
+        }
     } else {
-        [items addObject:@{ @"key": kAXLPPanelSaveImage, @"def": @YES, @"title": @"保存图片", @"kind": @"image" }];
-        if (AXSB_ImageURLsFromAweme(aweme).count > 1) {
-            [items addObject:@{ @"key": kAXLPPanelSaveAllImages, @"def": @YES, @"title": @"保存所有图片", @"kind": @"image_all" }];
+        if (AXSB_Bool(kAXLPPanelSaveVideo, YES)) {
+            [items addObject:@{ @"title": @"保存视频", @"kind": @"video" }];
+        }
+        if (AXSB_Bool(kAXLPPanelSaveCover, YES)) {
+            [items addObject:@{ @"title": @"保存封面", @"kind": @"cover" }];
+        }
+        if (AXSB_Bool(kAXLPPanelSaveAudio, YES)) {
+            [items addObject:@{ @"title": @"保存音频", @"kind": @"audio" }];
         }
     }
-    [items addObject:@{ @"key": kAXLPPanelCopyText, @"def": @NO, @"title": @"复制文案", @"kind": @"copy_text" }];
 
-    for (NSDictionary *item in items) {
-        if (!AXSB_Bool(item[@"key"], [item[@"def"] boolValue])) continue;
-        id action = AXSB_MakeAction(item[@"title"], item[@"kind"]);
-        if (action) [actions addObject:action];
+    if (AXSB_Bool(kAXLPPanelCopyText, NO)) {
+        [items addObject:@{ @"title": @"复制文案", @"kind": @"copy_text" }];
     }
-    return actions;
+    return items;
 }
 
-static BOOL AXSB_ActionTitleExists(NSArray *actions, NSString *title) {
-    if (title.length == 0) return NO;
-    for (id action in actions) {
-        NSString *t = nil;
-        if ([action respondsToSelector:@selector(title)]) t = AXSB_Send0(action, @selector(title));
-        if (!t && [action respondsToSelector:@selector(valueForKey:)]) {
-            @try { t = [action valueForKey:@"title"]; } @catch (NSException *e) {}
-        }
-        if ([t isKindOfClass:NSString.class] && [t isEqualToString:title]) return YES;
-    }
-    return NO;
+static void AXSB_CloseLongPressPanel(void) {
+    UIView *overlay = axLongPressOverlay;
+    axLongPressOverlay = nil;
+    axLongPressPanel = nil;
+    axLongPressCurrentItems = nil;
+    axNativeLongPressPlayVC = nil;
+    if (!overlay) return;
+    [UIView animateWithDuration:0.16 animations:^{
+        overlay.alpha = 0;
+    } completion:^(BOOL finished) {
+        [overlay removeFromSuperview];
+    }];
 }
 
-static NSArray *AXSB_ActionsByAppendingAwemeXActions(NSArray *actions) {
-    if (![actions isKindOfClass:NSArray.class]) return actions;
-    if (!axCurrentLongPressAweme) return actions;
-    if ([[NSDate date] timeIntervalSince1970] - axCurrentLongPressAwemeTime > 2.5) return actions;
-
-    NSMutableArray *extra = AXSB_BuildLongPressActionsForAweme(axCurrentLongPressAweme);
-    if (extra.count == 0) return actions;
-
-    NSMutableArray *out = [actions mutableCopy];
-    for (id action in extra) {
-        NSString *title = nil;
-        if ([action respondsToSelector:@selector(title)]) title = AXSB_Send0(action, @selector(title));
-        if (!title && [action respondsToSelector:@selector(valueForKey:)]) {
-            @try { title = [action valueForKey:@"title"]; } @catch (NSException *e) {}
-        }
-        if (![title isKindOfClass:NSString.class] || !AXSB_ActionTitleExists(out, title)) {
-            [out addObject:action];
-        }
-    }
-    return out;
+static UIButton *AXSB_MakePanelButton(NSString *title, NSInteger tag, CGRect frame) {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+    button.frame = frame;
+    button.tag = tag;
+    button.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.075];
+    button.layer.cornerRadius = 14;
+    button.clipsToBounds = YES;
+    button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+    button.titleEdgeInsets = UIEdgeInsetsMake(0, 20, 0, 20);
+    [button setTitle:title forState:UIControlStateNormal];
+    [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    button.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    return button;
 }
 
+static void AXSB_ShowCustomLongPressPanelForAweme(id aweme, id playVC) {
+    if (!aweme) { AXSB_Toast(@"未找到当前作品模型"); return; }
+    NSArray<NSDictionary *> *items = AXSB_BuildLongPressItemsForAweme(aweme);
+    if (items.count == 0) {
+        if (playVC) {
+            axOpeningNativeLongPress = YES;
+            ((void (*)(id, SEL))objc_msgSend)(playVC, @selector(showDislikeOnVideo));
+        }
+        return;
+    }
+
+    AXSB_CloseLongPressPanel();
+    axCurrentLongPressAweme = aweme;
+    axNativeLongPressPlayVC = playVC;
+    axLongPressCurrentItems = items;
+
+    UIWindow *w = AXSB_KeyWindow();
+    if (!w) return;
+    CGRect b = w.bounds;
+
+    UIView *overlay = [[UIView alloc] initWithFrame:b];
+    overlay.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.08];
+    overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    overlay.alpha = 0;
+    overlay.layer.zPosition = CGFLOAT_MAX;
+    [w addSubview:overlay];
+    axLongPressOverlay = overlay;
+
+    UIButton *dismiss = [UIButton buttonWithType:UIButtonTypeCustom];
+    dismiss.frame = overlay.bounds;
+    dismiss.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [dismiss addTarget:[AXLongPressPanelTarget shared] action:@selector(closeLongPressPanel) forControlEvents:UIControlEventTouchUpInside];
+    [overlay addSubview:dismiss];
+
+    CGFloat panelW = MIN(520.0, MAX(320.0, b.size.width - 80.0));
+    CGFloat rowH = 52.0;
+    CGFloat contentH = 76.0 + items.count * (rowH + 12.0) + 70.0;
+    CGFloat panelH = MIN(contentH, b.size.height * 0.72);
+    UIView *panel = [[UIView alloc] initWithFrame:CGRectMake((b.size.width - panelW) / 2.0, (b.size.height - panelH) / 2.0, panelW, panelH)];
+    panel.backgroundColor = [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.90];
+    panel.layer.cornerRadius = 22;
+    panel.layer.masksToBounds = YES;
+    [overlay addSubview:panel];
+    axLongPressPanel = panel;
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(24, 18, panelW - 90, 34)];
+    title.text = (AXSB_AwemeContentType(aweme) == 1) ? @"图片面板" : @"视频面板";
+    title.textColor = UIColor.whiteColor;
+    title.font = [UIFont boldSystemFontOfSize:20];
+    [panel addSubview:title];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
+    close.frame = CGRectMake(panelW - 58, 16, 40, 40);
+    [close setTitle:@"×" forState:UIControlStateNormal];
+    [close setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont boldSystemFontOfSize:30];
+    [close addTarget:[AXLongPressPanelTarget shared] action:@selector(closeLongPressPanel) forControlEvents:UIControlEventTouchUpInside];
+    [panel addSubview:close];
+
+    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 66, panelW, panelH - 66)];
+    scroll.showsVerticalScrollIndicator = YES;
+    [panel addSubview:scroll];
+
+    CGFloat y = 4.0;
+    for (NSInteger i = 0; i < (NSInteger)items.count; i++) {
+        UIButton *btn = AXSB_MakePanelButton(items[i][@"title"], i, CGRectMake(24, y, panelW - 48, rowH));
+        [btn addTarget:[AXLongPressPanelTarget shared] action:@selector(actionTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [scroll addSubview:btn];
+        y += rowH + 12.0;
+    }
+
+    UIButton *native = AXSB_MakePanelButton(@"打开原长按面板", 999, CGRectMake(24, y + 2.0, panelW - 48, 46.0));
+    native.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    [native addTarget:[AXLongPressPanelTarget shared] action:@selector(openNativeLongPressPanel) forControlEvents:UIControlEventTouchUpInside];
+    [scroll addSubview:native];
+    y += 58.0;
+    scroll.contentSize = CGSizeMake(panelW, MAX(y, scroll.bounds.size.height + 1.0));
+
+    panel.transform = CGAffineTransformMakeScale(0.96, 0.96);
+    [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{
+        overlay.alpha = 1;
+        panel.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
+@implementation AXLongPressPanelTarget
++ (instancetype)shared {
+    static AXLongPressPanelTarget *target;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ target = [AXLongPressPanelTarget new]; });
+    return target;
+}
+
+- (void)closeLongPressPanel {
+    AXSB_CloseLongPressPanel();
+}
+
+- (void)actionTapped:(UIButton *)sender {
+    NSInteger idx = sender.tag;
+    if (idx < 0 || idx >= (NSInteger)axLongPressCurrentItems.count) return;
+    NSDictionary *item = axLongPressCurrentItems[idx];
+    NSString *kind = item[@"kind"];
+    AXSB_CloseLongPressPanel();
+    AXSB_HandleSaveKind(kind);
+}
+
+- (void)openNativeLongPressPanel {
+    id vc = axNativeLongPressPlayVC;
+    AXSB_CloseLongPressPanel();
+    if (!vc) return;
+    axOpeningNativeLongPress = YES;
+    ((void (*)(id, SEL))objc_msgSend)(vc, @selector(showDislikeOnVideo));
+}
+@end
 
 %hook AWEPlayInteractionViewController
 - (void)showDislikeOnVideo {
-    id aweme = AXSB_AwemeModelFromPlayVC((id)self);
-    if (aweme) {
-        axCurrentLongPressAweme = aweme;
-        axCurrentLongPressAwemeTime = [[NSDate date] timeIntervalSince1970];
+    if (axOpeningNativeLongPress) {
+        axOpeningNativeLongPress = NO;
+        %orig;
+        return;
     }
-    %orig;
-}
-%end
-
-%hook AWEUserActionSheetView
-- (void)setActions:(NSArray *)actions {
-    %orig(AXSB_ActionsByAppendingAwemeXActions(actions));
+    id aweme = AXSB_AwemeModelFromPlayVC((id)self);
+    if (!aweme) {
+        %orig;
+        return;
+    }
+    AXSB_ShowCustomLongPressPanelForAweme(aweme, (id)self);
 }
 %end
 
