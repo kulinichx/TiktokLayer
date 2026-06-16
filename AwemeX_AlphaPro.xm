@@ -455,16 +455,6 @@ static void AXApplySearchEntranceHide(UIView *v) {
     }
 }
 
-static void AXApplyToSubviews(UIView *view) {
-    if (!view) return;
-    if (AXIsElementStackLike(view)) {
-        AXApplyElementEffects(view);
-    } else {
-        AXApplyOverlayLeafAlpha(view);
-    }
-    for (UIView *sub in view.subviews) AXApplyToSubviews(sub);
-}
-
 static void AXRefreshAllStacks(void) {
     if (![NSThread isMainThread]) {
         dispatch_async(dispatch_get_main_queue(), ^{ AXRefreshAllStacks(); });
@@ -606,7 +596,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         [w bringSubviewToFront:axPanel];
 
         UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 20, width, 28)];
-        title.text = @"AwemeX 设置 V39 Safe";
+        title.text = @"AwemeX 设置 V40 Safe";
         title.textColor = UIColor.whiteColor;
         title.font = [UIFont boldSystemFontOfSize:18];
         title.textAlignment = NSTextAlignmentCenter;
@@ -653,7 +643,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         }
 
         UILabel *note = [[UILabel alloc] initWithFrame:CGRectMake(30, height - 98, width - 60, 22)];
-        note.text = @"V39：透明度只处理首页播放页文字/图标，设置页不再全窗口扫描。";
+        note.text = @"V40：只处理首页播放页文字/图标，修复未使用函数编译失败。";
         note.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.50];
         note.font = [UIFont systemFontOfSize:11];
         note.numberOfLines = 1;
@@ -1064,12 +1054,6 @@ static void AXOF_ApplyView(UIView *v) {
         return;
     }
     AXOF_ReapplyMarkedView(v);
-}
-
-static void AXOF_RefreshRecursive(UIView *v) {
-    if (!v) return;
-    AXOF_ApplyView(v);
-    for (UIView *sub in v.subviews) AXOF_RefreshRecursive(sub);
 }
 
 static void AXOF_RefreshAll(void) {
