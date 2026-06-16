@@ -1,9 +1,9 @@
-Package: com.your.awemex.fix
-Name: AwemeX iPad Fix
-Depends: mobilesubstrate
+Package: com.kulinichx.tiktoklayer
+Name: TiktokLayer
+Version: 1.0.1
 Architecture: iphoneos-arm64
-Description: Fix AwemeX for iPad
-Version: 1.0
-Maintainer: You
-Author: You
+Description: iPad layer UI adjustment for Douyin/Aweme.
+Maintainer: kulinichx
+Author: kulinichx
 Section: Tweaks
+Depends: mobilesubstrate | ellekit
