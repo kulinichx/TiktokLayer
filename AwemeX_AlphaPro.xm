@@ -3,12 +3,20 @@
 #import <objc/runtime.h>
 #import <math.h>
 
-static CGFloat gAlphaTop = 1.0;
-static CFTimeInterval gLastPrefsRead = 0;
-static const CGFloat kMinVisibleAlpha = 0.011;
+static const CGFloat TLInvalidAlpha = -1.0;
+static const CGFloat TLMinVisibleAlpha = 0.011;
+static NSString *const TLGlobalTransparencyKey = @"DYYYGlobalTransparency";
+static NSString *const TLTopBarTransparencyKey = @"DYYYTopBarTransparent";
+static NSString *const TLAvatarTransparencyKey = @"DYYYAvatarViewTransparency";
+static char TLBaseAlphaKey;
+static NSInteger TLAlphaMutationDepth = 0;
+static CFTimeInterval TLLastPrefsRead = 0;
+static CGFloat TLGlobalAlpha = TLInvalidAlpha;
+static CGFloat TLTopBarAlpha = TLInvalidAlpha;
+static CGFloat TLAvatarAlpha = TLInvalidAlpha;
 
 static inline BOOL TLIsIpad(void) {
-    return UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad;
+    return [[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad;
 }
 
 static inline CGFloat TLClampAlpha(CGFloat value) {
@@ -18,76 +26,150 @@ static inline CGFloat TLClampAlpha(CGFloat value) {
     return value;
 }
 
-static void TLLoadSettingsIfNeeded(void) {
+static CGFloat TLReadAlphaForKey(NSString *key) {
+    id raw = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    if (![raw respondsToSelector:@selector(floatValue)]) return TLInvalidAlpha;
+    NSString *stringValue = [raw isKindOfClass:[NSString class]] ? (NSString *)raw : [raw stringValue];
+    if (stringValue.length == 0) return TLInvalidAlpha;
+    return TLClampAlpha([raw floatValue]);
+}
+
+static void TLLoadPrefsIfNeeded(BOOL force) {
     CFTimeInterval now = CACurrentMediaTime();
-    if (now - gLastPrefsRead < 0.5) return;
-    gLastPrefsRead = now;
+    if (!force && now - TLLastPrefsRead < 0.25) return;
+    TLLastPrefsRead = now;
+    TLGlobalAlpha = TLReadAlphaForKey(TLGlobalTransparencyKey);
+    TLTopBarAlpha = TLReadAlphaForKey(TLTopBarTransparencyKey);
+    TLAvatarAlpha = TLReadAlphaForKey(TLAvatarTransparencyKey);
+}
 
-    id raw = [[NSUserDefaults standardUserDefaults] objectForKey:@"alpha_top"];
-    if ([raw respondsToSelector:@selector(floatValue)]) {
-        CGFloat value = TLClampAlpha([raw floatValue]);
-        gAlphaTop = value;
-    } else {
-        gAlphaTop = 1.0;
+static CGFloat TLEffectiveAlpha(CGFloat baseAlpha, CGFloat factor) {
+    baseAlpha = TLClampAlpha(baseAlpha);
+    if (factor == TLInvalidAlpha) return baseAlpha;
+    CGFloat finalAlpha = TLClampAlpha(baseAlpha * factor);
+    if (baseAlpha > 0.0 && finalAlpha < TLMinVisibleAlpha) finalAlpha = TLMinVisibleAlpha;
+    return finalAlpha;
+}
+
+static void TLSetAlphaWithoutRebase(UIView *view, CGFloat alpha) {
+    TLAlphaMutationDepth++;
+    view.alpha = alpha;
+    TLAlphaMutationDepth--;
+}
+
+static void TLApplyGlobalAlpha(UIView *view) {
+    if (!view || !TLIsIpad() || !view.window) return;
+    TLLoadPrefsIfNeeded(NO);
+    NSNumber *stored = objc_getAssociatedObject(view, &TLBaseAlphaKey);
+    CGFloat baseAlpha = stored ? stored.floatValue : view.alpha;
+    if (!stored) {
+        objc_setAssociatedObject(view, &TLBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    CGFloat finalAlpha = TLEffectiveAlpha(baseAlpha, TLGlobalAlpha);
+    if (fabs(view.alpha - finalAlpha) >= 0.001) {
+        TLSetAlphaWithoutRebase(view, finalAlpha);
     }
 }
 
-static BOOL TLShouldAdjustView(UIView *view) {
-    if (!view || !TLIsIpad()) return NO;
-    if ([view isKindOfClass:[UIWindow class]]) return NO;
+static CGFloat TLAlphaForStackView(UIView *view, CGFloat alpha) {
+    if (!TLIsIpad() || TLAlphaMutationDepth > 0) return alpha;
+    TLLoadPrefsIfNeeded(NO);
+    CGFloat baseAlpha = TLClampAlpha(alpha);
+    objc_setAssociatedObject(view, &TLBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return TLEffectiveAlpha(baseAlpha, TLGlobalAlpha);
+}
 
-    NSString *className = NSStringFromClass([view class]);
-    if ([className hasPrefix:@"UIKeyboard"] || [className hasPrefix:@"UIText"] || [className hasPrefix:@"WK"]) {
-        return NO;
-    }
-
-    // 优先限制在抖音常见的顶栏 / 播放交互 / 直播图层，避免全局污染所有 UIKit 视图。
-    static NSArray<NSString *> *targetKeywords;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        targetKeywords = @[
-            @"TopBar", @"Tab", @"PlayInteraction", @"ElementStack",
-            @"LandscapeFeed", @"Feed", @"Live", @"AWE", @"IESLive", @"AFD"
-        ];
+static void TLDelayedApplyGlobalAlpha(UIView *view) {
+    if (!view || !view.window || !TLIsIpad()) return;
+    TLApplyGlobalAlpha(view);
+    __weak UIView *weakView = view;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        TLApplyGlobalAlpha(weakView);
     });
-
-    for (NSString *keyword in targetKeywords) {
-        if ([className containsString:keyword]) return YES;
-    }
-
-    return NO;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        TLApplyGlobalAlpha(weakView);
+    });
 }
 
-%hook UIView
-
-- (void)setAlpha:(CGFloat)alpha {
-    if (![NSThread isMainThread]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self setAlpha:alpha];
-        });
-        return;
+%hook AWEFeedTopBarContainer
+- (void)didMoveToSuperview {
+    %orig;
+    if (!TLIsIpad()) return;
+    TLLoadPrefsIfNeeded(NO);
+    if (TLTopBarAlpha != TLInvalidAlpha) {
+        TLSetAlphaWithoutRebase(self, TLEffectiveAlpha(1.0, TLTopBarAlpha));
     }
-
-    if (!TLShouldAdjustView(self)) {
+}
+- (void)setAlpha:(CGFloat)alpha {
+    if (!TLIsIpad() || TLAlphaMutationDepth > 0) {
         %orig(alpha);
         return;
     }
-
-    TLLoadSettingsIfNeeded();
-
-    CGFloat baseAlpha = TLClampAlpha(alpha);
-    CGFloat finalAlpha = TLClampAlpha(baseAlpha * gAlphaTop);
-
-    // 0 会让很多容器不可交互；保留极小 alpha，兼容原 DYYY 顶栏透明处理思路。
-    if (baseAlpha > 0.0 && finalAlpha < kMinVisibleAlpha) {
-        finalAlpha = kMinVisibleAlpha;
-    }
-
-    if (fabs(self.alpha - finalAlpha) <= 0.001) {
-        return;
-    }
-
-    %orig(finalAlpha);
+    TLLoadPrefsIfNeeded(NO);
+    %orig(TLEffectiveAlpha(1.0, TLTopBarAlpha));
 }
-
 %end
+
+%hook AWEAdAvatarView
+- (void)layoutSubviews {
+    %orig;
+    if (!TLIsIpad()) return;
+    TLLoadPrefsIfNeeded(NO);
+    if (TLAvatarAlpha != TLInvalidAlpha) {
+        TLSetAlphaWithoutRebase(self, TLEffectiveAlpha(1.0, TLAvatarAlpha));
+    }
+}
+%end
+
+%hook LOTAnimationView
+- (void)layoutSubviews {
+    %orig;
+    if (!TLIsIpad()) return;
+    if ([self.superview isKindOfClass:NSClassFromString(@"AWEPlayInteractionFollowPromptView")]) {
+        TLLoadPrefsIfNeeded(NO);
+        if (TLAvatarAlpha != TLInvalidAlpha) {
+            TLSetAlphaWithoutRebase(self, TLEffectiveAlpha(1.0, TLAvatarAlpha));
+        }
+    }
+}
+%end
+
+%hook AWEElementStackView
+- (void)setAlpha:(CGFloat)alpha {
+    %orig(TLAlphaForStackView(self, alpha));
+}
+- (void)didMoveToWindow {
+    %orig;
+    TLDelayedApplyGlobalAlpha(self);
+}
+%end
+
+%hook IESLiveStackView
+- (void)setAlpha:(CGFloat)alpha {
+    %orig(TLAlphaForStackView(self, alpha));
+}
+- (void)didMoveToWindow {
+    %orig;
+    TLDelayedApplyGlobalAlpha(self);
+}
+%end
+
+%hook AWELandscapeFeedEntryView
+- (void)setAlpha:(CGFloat)alpha {
+    %orig(TLAlphaForStackView(self, alpha));
+}
+- (void)didMoveToWindow {
+    %orig;
+    TLDelayedApplyGlobalAlpha(self);
+}
+%end
+
+%ctor {
+    TLLoadPrefsIfNeeded(YES);
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(__unused NSNotification *note) {
+        TLLoadPrefsIfNeeded(YES);
+    }];
+}
