@@ -8,6 +8,9 @@
 @interface IESLiveStackView : UIView
 @end
 
+@interface AWELandscapeFeedEntryView : UIView
+@end
+
 @interface AWEPlayInteractionViewController : UIViewController
 @end
 
@@ -58,13 +61,20 @@ static CGFloat AXEffectiveAlpha(NSString *key, CGFloat def) {
 }
 
 static char kAXBaseAlphaKey;
+static NSInteger axAlphaMutationDepth = 0;
+static void AXSetAlphaDirect(UIView *v, CGFloat alpha) {
+    if (!v) return;
+    axAlphaMutationDepth++;
+    v.alpha = alpha;
+    axAlphaMutationDepth--;
+}
 static void AXApplyAlphaKeepingBase(UIView *v, CGFloat multiplier) {
     if (!v) return;
     NSNumber *stored = objc_getAssociatedObject(v, &kAXBaseAlphaKey);
     CGFloat baseAlpha = stored ? stored.floatValue : v.alpha;
     if (!stored) objc_setAssociatedObject(v, &kAXBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     CGFloat finalAlpha = AXClamp01(baseAlpha * multiplier);
-    if (fabs(v.alpha - finalAlpha) > 0.001) v.alpha = finalAlpha;
+    if (fabs(v.alpha - finalAlpha) > 0.001) AXSetAlphaDirect(v, finalAlpha);
 }
 
 static UIWindow *AXKeyWindow(void) {
@@ -422,6 +432,22 @@ static void AXApplyElementEffects(UIView *v) {
     axApplyingElementEffects = NO;
 }
 
+static CGFloat AXElementIncomingAlpha(UIView *v, CGFloat alpha) {
+    CGFloat clamped = AXClamp01(alpha);
+    if (!v || AXIsAwemeXPanelView(v) || !AXIsHomeFeedContext(v)) return clamped;
+    if (AXIsRightStack(v)) return AXClamp01(clamped * AXEffectiveAlpha(kAXRightAlpha, 0.80));
+    if (AXIsLeftStack(v)) return AXClamp01(clamped * AXGlobalAlpha());
+    if (AXIsTopStack(v)) return AXClamp01(clamped * AXEffectiveAlpha(kAXTopAlpha, 0.65));
+    return clamped;
+}
+
+static void AXRefreshTrackedSubviews(UIView *root, NSInteger depth) {
+    if (!root || depth > 5 || !AXIsHomeFeedContext(root) || AXIsAwemeXPanelView(root)) return;
+    AXApplyOverlayLeafAlpha(root);
+    for (UIView *sub in [root.subviews copy]) {
+        AXRefreshTrackedSubviews(sub, depth + 1);
+    }
+}
 
 static void AXRefreshButton(void) {
     if (!axButton) return;
@@ -437,21 +463,41 @@ static void AXRefreshButton(void) {
 
 
 
+static char kAXSearchBaseLayerOpacityKey;
+static char kAXSearchBaseAlphaKey;
+
 static void AXApplySearchEntranceHide(UIView *v) {
     if (!v || AXIsAwemeXPanelView(v) || !AXIsHomeFeedContext(v)) return;
+
+    // 右上搜索入口：只隐藏视觉，不禁用点击。
+    // 不使用 hidden=YES / alpha=0，因为 UIKit 命中测试会跳过 hidden 或 alpha <= 0.01 的 view，导致“隐藏后点不开搜索”。
     BOOL shouldHide = AXBool(kAXHideSearch, YES);
+    NSNumber *marked = objc_getAssociatedObject(v, @selector(AXApplySearchEntranceHide));
+    NSNumber *baseLayerOpacity = objc_getAssociatedObject(v, &kAXSearchBaseLayerOpacityKey);
+    NSNumber *baseAlpha = objc_getAssociatedObject(v, &kAXSearchBaseAlphaKey);
+
+    if (!baseLayerOpacity) {
+        baseLayerOpacity = @(v.layer.opacity);
+        objc_setAssociatedObject(v, &kAXSearchBaseLayerOpacityKey, baseLayerOpacity, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (!baseAlpha && v.alpha > 0.01) {
+        baseAlpha = @(v.alpha);
+        objc_setAssociatedObject(v, &kAXSearchBaseAlphaKey, baseAlpha, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
     if (shouldHide) {
         objc_setAssociatedObject(v, @selector(AXApplySearchEntranceHide), @(YES), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        v.hidden = YES;
-        v.alpha = 0.0;
-        v.userInteractionEnabled = NO;
-    } else {
-        NSNumber *marked = objc_getAssociatedObject(v, @selector(AXApplySearchEntranceHide));
-        if (marked.boolValue) {
-            v.hidden = NO;
-            v.alpha = 1.0;
-            v.userInteractionEnabled = YES;
-        }
+        v.hidden = NO;
+        v.userInteractionEnabled = YES;
+        // 保持 UIView.alpha > 0.01，点击区域继续参与 hitTest；只用 layer.opacity 隐藏图标/文字。
+        if (v.alpha <= 0.01) v.alpha = baseAlpha ? MAX(baseAlpha.floatValue, 0.02) : 1.0;
+        v.layer.opacity = 0.0f;
+    } else if (marked.boolValue) {
+        v.hidden = NO;
+        v.userInteractionEnabled = YES;
+        v.layer.opacity = baseLayerOpacity ? baseLayerOpacity.floatValue : 1.0f;
+        if (v.alpha <= 0.01) v.alpha = baseAlpha ? MAX(baseAlpha.floatValue, 0.02) : 1.0;
+        objc_setAssociatedObject(v, @selector(AXApplySearchEntranceHide), nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 }
 
@@ -463,7 +509,10 @@ static void AXRefreshAllStacks(void) {
 
     NSArray *elements = [[AXTrackedElementViews() allObjects] copy];
     for (UIView *v in elements) {
-        if (v.window && AXIsHomeFeedContext(v)) AXApplyElementEffects(v);
+        if (v.window && AXIsHomeFeedContext(v)) {
+            AXApplyElementEffects(v);
+            AXRefreshTrackedSubviews(v, 0);
+        }
     }
 
     NSArray *overlays = [[AXTrackedOverlayViews() allObjects] copy];
@@ -565,7 +614,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
     label.text = [NSString stringWithFormat:@"%.0f%%", sender.value * 100.0];
     AXRefreshButton();
     AXRefreshAllStacks();
-    if (sender.tag == 7 || sender.tag == 8) AXOF_RefreshAll();
+    AXOF_RefreshAll();
 }
 
 
@@ -596,7 +645,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         [w bringSubviewToFront:axPanel];
 
         UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 20, width, 28)];
-        title.text = @"AwemeX 设置 V40 Safe";
+        title.text = @"AwemeX 设置 V41 Alpha";
         title.textColor = UIColor.whiteColor;
         title.font = [UIFont boldSystemFontOfSize:18];
         title.textAlignment = NSTextAlignmentCenter;
@@ -643,7 +692,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         }
 
         UILabel *note = [[UILabel alloc] initWithFrame:CGRectMake(30, height - 98, width - 60, 22)];
-        note.text = @"V40：只处理首页播放页文字/图标，修复未使用函数编译失败。";
+        note.text = @"V41：透明度守护版：只处理首页播放页文字/图标。";
         note.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.50];
         note.font = [UIFont systemFontOfSize:11];
         note.numberOfLines = 1;
@@ -969,12 +1018,13 @@ static void AXOF_ApplyAlphaKind(UIView *v, CGFloat alpha, NSInteger kind) {
     AXTrackOverlayView(v);
     objc_setAssociatedObject(v, &kAXOFTargetKindKey, @(kind), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     NSNumber *base = objc_getAssociatedObject(v, &kAXOFBaseAlphaKey);
-    CGFloat baseAlpha = base ? base.floatValue : v.alpha;
+    NSNumber *primaryBase = objc_getAssociatedObject(v, &kAXBaseAlphaKey);
+    CGFloat baseAlpha = base ? base.floatValue : (primaryBase ? primaryBase.floatValue : v.alpha);
     if (!base) objc_setAssociatedObject(v, &kAXOFBaseAlphaKey, @(baseAlpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     CGFloat finalAlpha = AXOF_Clamp(baseAlpha * alpha);
     if (fabs(v.alpha - finalAlpha) > 0.001) {
         axofApplyingAlpha = YES;
-        v.alpha = finalAlpha;
+        AXSetAlphaDirect(v, finalAlpha);
         axofApplyingAlpha = NO;
     }
 }
@@ -983,8 +1033,8 @@ static void AXOF_ReapplyMarkedView(UIView *v) {
     if (!v || !AXIsHomeFeedContext(v) || AXOF_IsAwemeXOwnView(v)) return;
     NSNumber *kindNum = objc_getAssociatedObject(v, &kAXOFTargetKindKey);
     NSInteger kind = kindNum.integerValue;
-    if (kind == 1) AXOF_ApplyAlphaKind(v, AXOF_Float(kAXOFNicknameDescAlpha, 1.00), 1);
-    else if (kind == 2) AXOF_ApplyAlphaKind(v, AXOF_Float(kAXOFRelatedSearchAlpha, 0.55), 2);
+    if (kind == 1) AXOF_ApplyAlphaKind(v, AXOF_Clamp(AXOF_Float(kAXOFNicknameDescAlpha, 1.00) * AXGlobalAlpha()), 1);
+    else if (kind == 2) AXOF_ApplyAlphaKind(v, AXOF_Clamp(AXOF_Float(kAXOFRelatedSearchAlpha, 0.55) * AXGlobalAlpha()), 2);
 }
 
 
@@ -1023,7 +1073,7 @@ static void AXOF_ApplyRelatedNearbyInView(UIView *root, CGRect row, CGFloat alph
 
 static void AXOF_ApplyRelatedRowSiblings(UIView *container) {
     if (!container) return;
-    CGFloat alpha = AXOF_Float(kAXOFRelatedSearchAlpha, 0.55);
+    CGFloat alpha = AXOF_Clamp(AXOF_Float(kAXOFRelatedSearchAlpha, 0.55) * AXGlobalAlpha());
     CGRect row = AXOF_WindowFrame(container);
     if (CGRectIsEmpty(row)) return;
     row = CGRectInset(row, -140.0, -28.0);
@@ -1041,19 +1091,39 @@ static void AXOF_ApplyView(UIView *v) {
             // V36：相关搜索/相关视频/合集横条本身也接受“相关搜索不透明度”，
             // 这样左侧图标、标题和横条背景能一起变化；只允许安全的小横条容器，避免评论/分享大面板被误伤。
             if (AXOF_IsSafeRelatedContainerFrame(container)) {
-                AXOF_ApplyAlphaKind(container, AXOF_Float(kAXOFRelatedSearchAlpha, 0.55), 2);
+                AXOF_ApplyAlphaKind(container, AXOF_Clamp(AXOF_Float(kAXOFRelatedSearchAlpha, 0.55) * AXGlobalAlpha()), 2);
             } else if ([v isKindOfClass:UILabel.class] || [v isKindOfClass:UIButton.class] || [v isKindOfClass:UIImageView.class]) {
-                AXOF_ApplyAlphaKind(v, AXOF_Float(kAXOFRelatedSearchAlpha, 0.55), 2);
+                AXOF_ApplyAlphaKind(v, AXOF_Clamp(AXOF_Float(kAXOFRelatedSearchAlpha, 0.55) * AXGlobalAlpha()), 2);
             }
             AXOF_ApplyRelatedRowSiblings(container);
         }
         return;
     }
     if (AXOF_IsNicknameDescView(v)) {
-        AXOF_ApplyAlphaKind(v, AXOF_Float(kAXOFNicknameDescAlpha, 1.00), 1);
+        AXOF_ApplyAlphaKind(v, AXOF_Clamp(AXOF_Float(kAXOFNicknameDescAlpha, 1.00) * AXGlobalAlpha()), 1);
         return;
     }
     AXOF_ReapplyMarkedView(v);
+}
+
+static BOOL AXOF_ShouldOwnOpacity(UIView *v) {
+    if (!v || !AXIsHomeFeedContext(v) || AXOF_IsAwemeXOwnView(v)) return NO;
+    NSNumber *kindNum = objc_getAssociatedObject(v, &kAXOFTargetKindKey);
+    if (kindNum.integerValue == 1 || kindNum.integerValue == 2) return YES;
+    if (AXOF_HasMarkedRelatedSearchAncestor(v)) return YES;
+    return AXOF_IsRelatedSearchView(v) || AXOF_IsNicknameDescView(v);
+}
+
+static void AXApplyLeafOpacityAfterOriginalAlpha(UIView *v, CGFloat alpha) {
+    if (!v || axAlphaMutationDepth > 0 || axofApplyingAlpha || AXIsAwemeXPanelView(v) || !AXIsHomeFeedContext(v)) return;
+    CGFloat clamped = AXClamp01(alpha);
+    objc_setAssociatedObject(v, &kAXBaseAlphaKey, @(clamped), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(v, &kAXOFBaseAlphaKey, @(clamped), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (AXOF_ShouldOwnOpacity(v)) {
+        AXOF_ApplyView(v);
+    } else {
+        AXApplyOverlayLeafAlpha(v);
+    }
 }
 
 static void AXOF_RefreshAll(void) {
@@ -1065,8 +1135,8 @@ static void AXOF_RefreshAll(void) {
     NSArray *overlays = [[AXTrackedOverlayViews() allObjects] copy];
     for (UIView *v in overlays) {
         if (!v.window || !AXIsHomeFeedContext(v)) continue;
-        AXOF_ReapplyMarkedView(v);
-        AXApplyOverlayLeafAlpha(v);
+        if (AXOF_ShouldOwnOpacity(v)) AXOF_ApplyView(v);
+        else AXApplyOverlayLeafAlpha(v);
     }
 }
 
@@ -1162,7 +1232,7 @@ static void AXOF_RefreshAll(void) {
         }
 
         UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(28, height - 78, width - 56, 58)];
-        tip.text = @"V39：安全版：只处理首页播放页文字/图标，排除消息、我的、评论、分享。";
+        tip.text = @"V41：透明度守护版：全局透明会联动昵称/相关搜索。";
         tip.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.62];
         tip.font = [UIFont systemFontOfSize:11];
         tip.numberOfLines = 2;
@@ -1180,6 +1250,11 @@ static void AXOF_RefreshAll(void) {
 // 避免评论页、分享页、ActionSheet 这类复杂弹层被误伤为空白。
 
 %hook AWEElementStackView
+- (void)setAlpha:(CGFloat)alpha {
+    if (axAlphaMutationDepth > 0 || !self.window || !AXIsHomeFeedContext((UIView *)self)) { %orig(alpha); return; }
+    objc_setAssociatedObject((UIView *)self, &kAXBaseAlphaKey, @(AXClamp01(alpha)), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    %orig(AXElementIncomingAlpha((UIView *)self, alpha));
+}
 - (void)layoutSubviews { %orig; AXApplyElementEffects((UIView *)self); }
 - (void)didMoveToWindow { %orig; AXApplyElementEffects((UIView *)self); }
 - (NSArray *)arrangedSubviews { NSArray *r = %orig; AXApplyElementEffects((UIView *)self); return r; }
@@ -1199,6 +1274,11 @@ static void AXOF_RefreshAll(void) {
 %end
 
 %hook IESLiveStackView
+- (void)setAlpha:(CGFloat)alpha {
+    if (axAlphaMutationDepth > 0 || !self.window || !AXIsHomeFeedContext((UIView *)self)) { %orig(alpha); return; }
+    objc_setAssociatedObject((UIView *)self, &kAXBaseAlphaKey, @(AXClamp01(alpha)), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    %orig(AXElementIncomingAlpha((UIView *)self, alpha));
+}
 - (void)layoutSubviews { %orig; AXApplyElementEffects((UIView *)self); }
 - (void)didMoveToWindow { %orig; AXApplyElementEffects((UIView *)self); }
 - (NSArray *)arrangedSubviews { NSArray *r = %orig; AXApplyElementEffects((UIView *)self); return r; }
@@ -1217,6 +1297,16 @@ static void AXOF_RefreshAll(void) {
 }
 %end
 
+%hook AWELandscapeFeedEntryView
+- (void)setAlpha:(CGFloat)alpha {
+    if (axAlphaMutationDepth > 0 || !self.window || !AXIsHomeFeedContext((UIView *)self)) { %orig(alpha); return; }
+    objc_setAssociatedObject((UIView *)self, &kAXBaseAlphaKey, @(AXClamp01(alpha)), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    %orig(AXClamp01(alpha * AXGlobalAlpha()));
+}
+- (void)layoutSubviews { %orig; AXApplyElementEffects((UIView *)self); }
+- (void)didMoveToWindow { %orig; AXApplyElementEffects((UIView *)self); }
+%end
+
 %hook AWESearchEntranceView
 - (void)layoutSubviews { %orig; AXApplySearchEntranceHide((UIView *)self); }
 - (void)didMoveToWindow { %orig; AXApplySearchEntranceHide((UIView *)self); }
@@ -1230,45 +1320,53 @@ static void AXOF_RefreshAll(void) {
 %hook UILabel
 - (void)layoutSubviews {
     %orig;
-    AXApplyOverlayLeafAlpha((UIView *)self);
-    AXOF_ApplyView((UIView *)self);
+    if (AXOF_ShouldOwnOpacity((UIView *)self)) AXOF_ApplyView((UIView *)self);
+    else AXApplyOverlayLeafAlpha((UIView *)self);
 }
 - (void)didMoveToWindow {
     %orig;
-    AXOF_ApplyView((UIView *)self);
+    AXApplyLeafOpacityAfterOriginalAlpha((UIView *)self, self.alpha);
 }
 - (void)setAlpha:(CGFloat)alpha {
+    if (axAlphaMutationDepth > 0 || axofApplyingAlpha) { %orig(alpha); return; }
     %orig(alpha);
+    AXApplyLeafOpacityAfterOriginalAlpha((UIView *)self, alpha);
 }
 %end
 
 %hook UIButton
 - (void)layoutSubviews {
     %orig;
-    if ((UIView *)self != axButton) AXApplyOverlayLeafAlpha((UIView *)self);
-    AXOF_ApplyView((UIView *)self);
+    if ((UIView *)self != axButton) {
+        if (AXOF_ShouldOwnOpacity((UIView *)self)) AXOF_ApplyView((UIView *)self);
+        else AXApplyOverlayLeafAlpha((UIView *)self);
+    }
 }
 - (void)didMoveToWindow {
     %orig;
-    AXOF_ApplyView((UIView *)self);
+    AXApplyLeafOpacityAfterOriginalAlpha((UIView *)self, self.alpha);
 }
 - (void)setAlpha:(CGFloat)alpha {
+    if (axAlphaMutationDepth > 0 || axofApplyingAlpha) { %orig(alpha); return; }
     %orig(alpha);
+    if ((UIView *)self != axButton) AXApplyLeafOpacityAfterOriginalAlpha((UIView *)self, alpha);
 }
 %end
 
 %hook UIImageView
 - (void)layoutSubviews {
     %orig;
-    AXApplyOverlayLeafAlpha((UIView *)self);
-    AXOF_ApplyView((UIView *)self);
+    if (AXOF_ShouldOwnOpacity((UIView *)self)) AXOF_ApplyView((UIView *)self);
+    else AXApplyOverlayLeafAlpha((UIView *)self);
 }
 - (void)didMoveToWindow {
     %orig;
-    AXOF_ApplyView((UIView *)self);
+    AXApplyLeafOpacityAfterOriginalAlpha((UIView *)self, self.alpha);
 }
 - (void)setAlpha:(CGFloat)alpha {
+    if (axAlphaMutationDepth > 0 || axofApplyingAlpha) { %orig(alpha); return; }
     %orig(alpha);
+    AXApplyLeafOpacityAfterOriginalAlpha((UIView *)self, alpha);
 }
 %end
 
