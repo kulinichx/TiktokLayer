@@ -17,6 +17,7 @@ static UIButton *axButton = nil;
 static UIView *axPanel = nil;
 static UIView *axPanelContent = nil;
 static UIScrollView *axPanelScroll = nil;
+static UIView *axUpdateLogOverlay = nil;
 static UIView *axLongPressOverlay = nil;
 static UIView *axLongPressPanel = nil;
 static NSArray *axLongPressCurrentItems = nil;
@@ -111,7 +112,7 @@ static BOOL AXIsDescendantOf(UIView *v, UIView *ancestor) {
 }
 
 static BOOL AXIsAwemeXPanelView(UIView *v) {
-    return AXIsDescendantOf(v, axPanel) || AXIsDescendantOf(v, axButton) || AXIsDescendantOf(v, axLongPressOverlay) || AXIsDescendantOf(v, axLongPressPanel);
+    return AXIsDescendantOf(v, axPanel) || AXIsDescendantOf(v, axButton) || AXIsDescendantOf(v, axUpdateLogOverlay) || AXIsDescendantOf(v, axLongPressOverlay) || AXIsDescendantOf(v, axLongPressPanel);
 }
 
 static NSHashTable *AXTrackedElementViews(void) {
@@ -618,6 +619,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
 - (void)toggleLongPressPanelSettings;
 - (void)toggleUISettings;
 - (void)showUpdateLog;
+- (void)closeUpdateLog;
 @end
 
 static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width);
@@ -784,7 +786,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     [aboutCard addSubview:versionTitle];
 
     UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
-    versionValue.text = @"V48";
+    versionValue.text = @"V30";
     versionValue.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.72];
     versionValue.font = [UIFont boldSystemFontOfSize:14];
     versionValue.textAlignment = NSTextAlignmentRight;
@@ -898,8 +900,96 @@ static void AXReloadSettingsContent(BOOL animated) {
     AXReloadSettingsContent(YES);
 }
 
+- (void)closeUpdateLog {
+    [axUpdateLogOverlay removeFromSuperview];
+    axUpdateLogOverlay = nil;
+}
+
 - (void)showUpdateLog {
-    AXSB_Toast(@"V48：保存视频增加清晰度/来源选择；接口解析保留为后续可配置项。");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *w = AXKeyWindow();
+        if (!w) return;
+        [axUpdateLogOverlay removeFromSuperview];
+        CGRect b = UIScreen.mainScreen.bounds;
+
+        UIView *overlay = [[UIView alloc] initWithFrame:b];
+        overlay.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.28];
+        overlay.layer.zPosition = CGFLOAT_MAX;
+        overlay.userInteractionEnabled = YES;
+        [w addSubview:overlay];
+        axUpdateLogOverlay = overlay;
+
+        CGFloat panelW = MIN(640.0, b.size.width - 170.0);
+        panelW = MAX(420.0, panelW);
+        CGFloat panelH = MIN(540.0, b.size.height * 0.54);
+        panelH = MAX(360.0, panelH);
+        UIView *panel = [[UIView alloc] initWithFrame:CGRectMake((b.size.width - panelW) / 2.0, (b.size.height - panelH) / 2.0, panelW, panelH)];
+        panel.backgroundColor = [[UIColor colorWithWhite:0.96 alpha:1.0] colorWithAlphaComponent:0.92];
+        panel.layer.cornerRadius = 18;
+        panel.clipsToBounds = YES;
+        [overlay addSubview:panel];
+
+        UIView *grabber = [[UIView alloc] initWithFrame:CGRectMake((panelW - 48) / 2.0, 10, 48, 5)];
+        grabber.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.18];
+        grabber.layer.cornerRadius = 2.5;
+        [panel addSubview:grabber];
+
+        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(24, 24, panelW - 72, 32)];
+        title.text = @"更新日志";
+        title.textColor = [UIColor colorWithWhite:0.10 alpha:1.0];
+        title.font = [UIFont boldSystemFontOfSize:20];
+        [panel addSubview:title];
+
+        UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+        close.frame = CGRectMake(panelW - 54, 22, 38, 38);
+        [close setTitle:@"×" forState:UIControlStateNormal];
+        [close setTitleColor:[UIColor colorWithWhite:0.18 alpha:1.0] forState:UIControlStateNormal];
+        close.titleLabel.font = [UIFont boldSystemFontOfSize:26];
+        [close addTarget:self action:@selector(closeUpdateLog) forControlEvents:UIControlEventTouchUpInside];
+        [panel addSubview:close];
+
+        UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(24, 58, panelW - 48, 24)];
+        sub.text = @"AwemeX for iPad · 当前版本 V30";
+        sub.textColor = [UIColor colorWithWhite:0.35 alpha:1.0];
+        sub.font = [UIFont systemFontOfSize:13];
+        [panel addSubview:sub];
+
+        UITextView *text = [[UITextView alloc] initWithFrame:CGRectMake(22, 92, panelW - 44, panelH - 112)];
+        text.backgroundColor = UIColor.clearColor;
+        text.editable = NO;
+        text.selectable = YES;
+        text.alwaysBounceVertical = YES;
+        text.showsVerticalScrollIndicator = YES;
+        text.textContainerInset = UIEdgeInsetsMake(0, 0, 20, 0);
+        text.font = [UIFont systemFontOfSize:14];
+        text.textColor = [UIColor colorWithWhite:0.18 alpha:1.0];
+        text.text = @"V30（UI 收尾版）\n"
+                    "· 当前版本显示改为 AwemeX for iPad / V30。\n"
+                    "· 更新日志改为正式弹窗，不再只用短提示。\n"
+                    "· 保持已稳定的透明度、缩放、隐藏项、单指长按面板与上下滑性能逻辑。\n"
+                    "· 面板设置开关继续控制长按面板显示项。\n\n"
+                    "V29\n"
+                    "· 修复视频源选择模块的编译问题。\n"
+                    "· 保存视频保留来源选择逻辑；仅当存在多个可用源时弹出选择。\n\n"
+                    "V27\n"
+                    "· 设置面板尺寸收小，标题改为 AwemeX for iPad。\n"
+                    "· 新增当前版本 / 更新日志入口。\n"
+                    "· 保存成功提示改为相册回调确认，减少假成功提示。\n\n"
+                    "V26\n"
+                    "· 修复单指长按面板编译问题。\n"
+                    "· 视频面板加入保存视频、保存封面、保存音频、复制文案与打开原长按面板。\n\n"
+                    "V18\n"
+                    "· 锁定稳定版界面透明、右侧缩放、隐藏搜索、隐藏相关搜索/合集逻辑。\n"
+                    "· 保持首页上下滑与菜单切换流畅。";
+        [panel addSubview:text];
+
+        panel.transform = CGAffineTransformMakeScale(0.96, 0.96);
+        panel.alpha = 0.0;
+        [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{
+            panel.alpha = 1.0;
+            panel.transform = CGAffineTransformIdentity;
+        } completion:nil];
+    });
 }
 
 - (void)openSettings {
