@@ -14,6 +14,9 @@
 @interface AWEPlayInteractionViewController : UIViewController
 @end
 
+@interface AWEFeedTopBarContainer : UIView
+@end
+
 static UIButton *axButton;
 static UIView *axPanel;
 static UIView *axofPanel = nil;
@@ -32,6 +35,8 @@ static NSString * const kAXShowButton = @"ax_show_button";
 static NSString * const kAXOFNicknameDescAlpha = @"ax_nickname_desc_alpha";
 static NSString * const kAXOFRelatedSearchAlpha = @"ax_related_search_alpha";
 static void AXOF_RefreshAll(void);
+static void AXApplyLeftStackTextAlphaFromStack(UIView *root);
+static void AXApplyTopBarEffects(UIView *root);
 
 static CGFloat AXFloat(NSString *key, CGFloat def) {
     id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
@@ -126,6 +131,15 @@ static NSHashTable *AXTrackedElementViews(void) {
 }
 
 static NSHashTable *AXTrackedOverlayViews(void) {
+    static NSHashTable *table = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        table = [NSHashTable weakObjectsHashTable];
+    });
+    return table;
+}
+
+static NSHashTable *AXTrackedTopBarViews(void) {
     static NSHashTable *table = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -418,8 +432,7 @@ static void AXApplyElementEffects(UIView *v) {
         CGFloat alpha = AXEffectiveAlpha(kAXRightAlpha, 0.80);
         CGAffineTransform t = AXRightStackTargetTransform(v);
 
-        // DYYY iPad 同款：直接作用在 AWEElementStackView 本体。
-        // 之前缩放会被系统后续 setTransform(identity) 覆盖；V20 会在 setTransform 里守护。
+        // 保留已确认正常的右侧栏缩放逻辑。
         if (!CGAffineTransformEqualToTransform(v.transform, t)) v.transform = t;
         AXApplyAlphaKeepingBase(v, alpha);
         axApplyingElementEffects = NO;
@@ -429,7 +442,9 @@ static void AXApplyElementEffects(UIView *v) {
     if (AXIsLeftStack(v)) {
         CGAffineTransform t = AXLeftStackTargetTransform(v);
         if (!CGAffineTransformEqualToTransform(v.transform, t)) v.transform = t;
+        // 左侧栈整体只吃全局透明；昵称/文案、相关搜索由子控件各自再吃独立不透明度。
         AXApplyAlphaKeepingBase(v, AXGlobalAlpha());
+        AXApplyLeftStackTextAlphaFromStack(v);
         axApplyingElementEffects = NO;
         return;
     }
@@ -437,10 +452,12 @@ static void AXApplyElementEffects(UIView *v) {
     if (AXIsTopStack(v)) {
         CGFloat alpha = AXEffectiveAlpha(kAXTopAlpha, 0.65);
         AXApplyAlphaKeepingBase(v, alpha);
+        AXApplyTopBarEffects(v);
     }
 
     axApplyingElementEffects = NO;
 }
+
 
 static CGFloat AXElementIncomingAlpha(UIView *v, CGFloat alpha) {
     CGFloat clamped = AXClamp01(alpha);
@@ -539,6 +556,11 @@ static void AXRefreshAllStacks(void) {
     NSArray *elements = [[AXTrackedElementViews() allObjects] copy];
     for (UIView *v in elements) {
         if (v.window && AXIsHomeFeedContext(v)) AXApplyElementEffects(v);
+    }
+
+    NSArray *topbars = [[AXTrackedTopBarViews() allObjects] copy];
+    for (UIView *v in topbars) {
+        if (v.window) AXApplyTopBarEffects(v);
     }
 
     NSArray *overlays = [[AXTrackedOverlayViews() allObjects] copy];
@@ -654,7 +676,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
     AXSet(kAXGlobalAlpha, @1.00); AXSet(kAXTopAlpha, @0.65); AXSet(kAXRightAlpha, @0.80); AXSet(kAXScale, @0.81);
     AXSet(kAXIconAlpha, @0.34); AXSet(kAXNicknameScale, @1.00); AXSet(kAXOFNicknameDescAlpha, @1.00); AXSet(kAXOFRelatedSearchAlpha, @0.55); AXSet(kAXHideSearch, @YES); AXSet(kAXShowButton, @YES);
     [self closeSettings];
-    AXRefreshAllStacks();
+    AXScheduleFullRefresh();
 }
 
 - (void)sliderChanged:(UISlider *)sender {
@@ -669,8 +691,8 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
 
     if (sender.tag == 5) {
         AXRefreshButton();
-    } else if (sender.tag == 3 || sender.tag == 4 || sender.tag == 6) {
-        // 右侧缩放、右侧透明、昵称缩放保持轻量实时预览。
+    } else if (sender.tag == 2 || sender.tag == 3 || sender.tag == 4 || sender.tag == 6 || sender.tag == 7 || sender.tag == 8) {
+        // 首页已跟踪控件轻量实时预览；不扫全窗口，避免切换“首页/消息/我”卡顿。
         AXScheduleSoftRefresh();
     }
 }
@@ -756,7 +778,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         }
 
         UILabel *note = [[UILabel alloc] initWithFrame:CGRectMake(30, height - 98, width - 60, 22)];
-        note.text = @"V42：设置滑块轻量化，透明只处理首页播放页。";
+        note.text = @"V43：透明只挂首页播放层，菜单切换减负。";
         note.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.50];
         note.font = [UIFont systemFontOfSize:11];
         note.numberOfLines = 1;
@@ -1169,6 +1191,129 @@ static void AXOF_ApplyView(UIView *v) {
     AXOF_ReapplyMarkedView(v);
 }
 
+
+static BOOL AXClassOrTextLooksRelated(UIView *v) {
+    NSString *cls = NSStringFromClass(v.class);
+    NSString *lowerCls = cls.lowercaseString;
+    NSString *txt = AXOF_ViewText(v);
+    return [txt containsString:@"相关搜索"] || [txt containsString:@"相关视频"] || [txt containsString:@"合集"] ||
+           ([txt containsString:@"搜索"] && txt.length <= 48) ||
+           [lowerCls containsString:@"relatedsearch"] || [lowerCls containsString:@"relationsearch"] ||
+           [lowerCls containsString:@"feedsearch"] || [lowerCls containsString:@"searchhint"] ||
+           [lowerCls containsString:@"mix"] || [lowerCls containsString:@"collection"] ||
+           [lowerCls containsString:@"series"] || [lowerCls containsString:@"playlist"] ||
+           [lowerCls containsString:@"aggregate"];
+}
+
+static BOOL AXClassOrTextLooksNicknameDesc(UIView *v) {
+    NSString *cls = NSStringFromClass(v.class);
+    NSString *lowerCls = cls.lowercaseString;
+    NSString *txt = AXOF_ViewText(v);
+    BOOL textLike = [v isKindOfClass:UILabel.class] || [v isKindOfClass:UIButton.class] ||
+                    [lowerCls containsString:@"label"] || [lowerCls containsString:@"text"] ||
+                    [lowerCls containsString:@"desc"] || [lowerCls containsString:@"caption"] ||
+                    [lowerCls containsString:@"rich"] || [lowerCls containsString:@"yylabel"] ||
+                    [lowerCls containsString:@"nickname"] || [lowerCls containsString:@"author"] ||
+                    [lowerCls containsString:@"feedanchor"];
+    if (!textLike) return NO;
+    if ([cls containsString:@"Nick"] || [cls containsString:@"Author"] || [cls containsString:@"Desc"] ||
+        [cls containsString:@"Caption"] || [cls containsString:@"TitleLabel"] || [cls containsString:@"FeedAnchor"] ||
+        [lowerCls containsString:@"nickname"] || [lowerCls containsString:@"author"] ||
+        [lowerCls containsString:@"description"] || [lowerCls containsString:@"caption"]) return YES;
+    if (txt.length == 0) return NO;
+    if ([txt hasPrefix:@"@"] || [txt containsString:@"#"] || [txt containsString:@"IP属地"] ||
+        [txt containsString:@"作者声明"] || [txt containsString:@"虚构演绎"] || [txt containsString:@"展开"] ||
+        [txt containsString:@"收起"] || [txt containsString:@"原声"] || [txt containsString:@"音乐"]) return YES;
+    return txt.length >= 2 && txt.length <= 220;
+}
+
+static void AXApplyAlphaToSubtree(UIView *root, CGFloat alpha, NSInteger depth) {
+    if (!root || depth > 6 || AXIsAwemeXPanelView(root)) return;
+    AXApplyAlphaKeepingBase(root, alpha);
+    for (UIView *sub in [root.subviews copy]) AXApplyAlphaToSubtree(sub, alpha, depth + 1);
+}
+
+static void AXApplyLeftStackTextAlphaRecursive(UIView *root, NSInteger depth) {
+    if (!root || depth > 9 || AXIsAwemeXPanelView(root)) return;
+    NSArray *subs = [root.subviews copy];
+    for (UIView *sub in subs) {
+        AXOF_ApplyView(sub);
+        if (AXClassOrTextLooksRelated(sub)) {
+            UIView *container = AXOF_FindRelatedSearchContainer(sub) ?: sub;
+            CGFloat alpha = AXOF_Float(kAXOFRelatedSearchAlpha, 0.55);
+            AXApplyAlphaToSubtree(container, alpha, 0);
+        } else if (AXClassOrTextLooksNicknameDesc(sub)) {
+            AXApplyAlphaKeepingBase(sub, AXOF_Float(kAXOFNicknameDescAlpha, 1.00));
+        }
+        AXApplyLeftStackTextAlphaRecursive(sub, depth + 1);
+    }
+}
+
+static void AXApplyLeftStackTextAlphaFromStack(UIView *root) {
+    if (!root || AXIsAwemeXPanelView(root)) return;
+    AXApplyLeftStackTextAlphaRecursive(root, 0);
+}
+
+static BOOL AXTopRightSearchCandidate(UIView *v) {
+    if (!v || !v.superview || AXIsAwemeXPanelView(v)) return NO;
+    UIWindow *w = v.window ?: AXKeyWindow();
+    if (!w) return NO;
+    CGRect f = [v.superview convertRect:v.frame toView:w];
+    CGSize s = UIScreen.mainScreen.bounds.size;
+    if (CGRectIsEmpty(f) || f.size.width <= 0 || f.size.height <= 0) return NO;
+    NSString *cls = NSStringFromClass(v.class);
+    NSString *lowerCls = cls.lowercaseString;
+    NSString *txt = AXOF_ViewText(v);
+    NSString *acc = v.accessibilityLabel ?: @"";
+    BOOL textLooks = [txt containsString:@"搜索"] || [acc containsString:@"搜索"] ||
+                     [txt.lowercaseString containsString:@"search"] || [acc.lowercaseString containsString:@"search"];
+    BOOL classLooks = [lowerCls containsString:@"search"] || [lowerCls containsString:@"discover"] ||
+                      [lowerCls containsString:@"entrance"] || [lowerCls containsString:@"magnifier"];
+    BOOL topRight = f.origin.x > s.width * 0.66 && f.origin.y > s.height * 0.015 && f.origin.y < s.height * 0.20 &&
+                    f.size.width >= 8.0 && f.size.width < 180.0 && f.size.height >= 8.0 && f.size.height < 110.0;
+    BOOL leafOrControl = [v isKindOfClass:UIControl.class] || [v isKindOfClass:UIImageView.class] || [v isKindOfClass:UILabel.class] || v.subviews.count <= 4;
+    return topRight && leafOrControl && (textLooks || classLooks || f.origin.x > s.width * 0.78);
+}
+
+static void AXSetSearchVisualHiddenKeepingTap(UIView *v, BOOL hidden) {
+    if (!v || AXIsAwemeXPanelView(v)) return;
+    NSNumber *baseLayerOpacity = objc_getAssociatedObject(v, &kAXSearchBaseLayerOpacityKey);
+    NSNumber *baseAlpha = objc_getAssociatedObject(v, &kAXSearchBaseAlphaKey);
+    if (!baseLayerOpacity) {
+        baseLayerOpacity = @(v.layer.opacity);
+        objc_setAssociatedObject(v, &kAXSearchBaseLayerOpacityKey, baseLayerOpacity, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (!baseAlpha) {
+        baseAlpha = @(MAX(v.alpha, 0.02));
+        objc_setAssociatedObject(v, &kAXSearchBaseAlphaKey, baseAlpha, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    v.hidden = NO;
+    v.userInteractionEnabled = YES;
+    if (hidden) {
+        if (v.alpha <= 0.01) AXSetAlphaDirect(v, MAX(baseAlpha.floatValue, 0.02));
+        v.layer.opacity = 0.0f;
+        objc_setAssociatedObject(v, @selector(AXApplySearchEntranceHide), @(YES), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } else {
+        v.layer.opacity = baseLayerOpacity.floatValue;
+        if (v.alpha <= 0.01) AXSetAlphaDirect(v, MAX(baseAlpha.floatValue, 0.02));
+        objc_setAssociatedObject(v, @selector(AXApplySearchEntranceHide), nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
+static void AXApplyTopBarSearchRecursive(UIView *root, NSInteger depth) {
+    if (!root || depth > 6 || AXIsAwemeXPanelView(root)) return;
+    BOOL hide = AXBool(kAXHideSearch, YES);
+    if (AXTopRightSearchCandidate(root)) AXSetSearchVisualHiddenKeepingTap(root, hide);
+    for (UIView *sub in [root.subviews copy]) AXApplyTopBarSearchRecursive(sub, depth + 1);
+}
+
+static void AXApplyTopBarEffects(UIView *root) {
+    if (!root || AXIsAwemeXPanelView(root)) return;
+    [AXTrackedTopBarViews() addObject:root];
+    AXApplyAlphaKeepingBase(root, AXEffectiveAlpha(kAXTopAlpha, 0.65));
+    AXApplyTopBarSearchRecursive(root, 0);
+}
+
 static void AXOF_RefreshAll(void) {
     if (![NSThread isMainThread]) {
         dispatch_async(dispatch_get_main_queue(), ^{ AXOF_RefreshAll(); });
@@ -1350,6 +1495,28 @@ static void AXOF_RefreshAll(void) {
 - (void)didMoveToWindow { %orig; AXApplyElementEffects((UIView *)self); }
 %end
 
+%hook AWEFeedTopBarContainer
+- (void)setAlpha:(CGFloat)alpha {
+    if (axAlphaMutationDepth > 0) { %orig(alpha); return; }
+    objc_setAssociatedObject((UIView *)self, &kAXBaseAlphaKey, @(AXClamp01(alpha)), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    CGFloat finalAlpha = AXClamp01(alpha * AXEffectiveAlpha(kAXTopAlpha, 0.65));
+    if (finalAlpha < 0.011) finalAlpha = 0.011;
+    %orig(finalAlpha);
+}
+- (void)layoutSubviews {
+    %orig;
+    AXApplyTopBarEffects((UIView *)self);
+}
+- (void)didMoveToSuperview {
+    %orig;
+    AXApplyTopBarEffects((UIView *)self);
+}
+- (void)didMoveToWindow {
+    %orig;
+    AXApplyTopBarEffects((UIView *)self);
+}
+%end
+
 %hook AWESearchEntranceView
 - (void)layoutSubviews { %orig; AXApplySearchEntranceHide((UIView *)self); }
 - (void)didMoveToWindow { %orig; AXApplySearchEntranceHide((UIView *)self); }
@@ -1360,74 +1527,7 @@ static void AXOF_RefreshAll(void) {
 - (void)didMoveToWindow { %orig; AXApplySearchEntranceHide((UIView *)self); }
 %end
 
-%hook UILabel
-- (void)layoutSubviews {
-    %orig;
-    AXApplySearchEntranceHide((UIView *)self);
-    AXApplyOverlayLeafAlpha((UIView *)self);
-    AXOF_ApplyView((UIView *)self);
-}
-- (void)didMoveToWindow {
-    %orig;
-    AXApplySearchEntranceHide((UIView *)self);
-    AXOF_ApplyView((UIView *)self);
-}
-- (void)setAlpha:(CGFloat)alpha {
-    if (axAlphaMutationDepth > 0 || axofApplyingAlpha) { %orig(alpha); return; }
-    %orig(alpha);
-    AXApplySearchEntranceHide((UIView *)self);
-    AXApplyOverlayLeafAlpha((UIView *)self);
-    AXOF_ApplyView((UIView *)self);
-}
-%end
 
-%hook UIButton
-- (void)layoutSubviews {
-    %orig;
-    if ((UIView *)self != axButton) {
-        AXApplySearchEntranceHide((UIView *)self);
-        AXApplyOverlayLeafAlpha((UIView *)self);
-        AXOF_ApplyView((UIView *)self);
-    }
-}
-- (void)didMoveToWindow {
-    %orig;
-    if ((UIView *)self != axButton) {
-        AXApplySearchEntranceHide((UIView *)self);
-        AXOF_ApplyView((UIView *)self);
-    }
-}
-- (void)setAlpha:(CGFloat)alpha {
-    if (axAlphaMutationDepth > 0 || axofApplyingAlpha) { %orig(alpha); return; }
-    %orig(alpha);
-    if ((UIView *)self != axButton) {
-        AXApplySearchEntranceHide((UIView *)self);
-        AXApplyOverlayLeafAlpha((UIView *)self);
-        AXOF_ApplyView((UIView *)self);
-    }
-}
-%end
-
-%hook UIImageView
-- (void)layoutSubviews {
-    %orig;
-    AXApplySearchEntranceHide((UIView *)self);
-    AXApplyOverlayLeafAlpha((UIView *)self);
-    AXOF_ApplyView((UIView *)self);
-}
-- (void)didMoveToWindow {
-    %orig;
-    AXApplySearchEntranceHide((UIView *)self);
-    AXOF_ApplyView((UIView *)self);
-}
-- (void)setAlpha:(CGFloat)alpha {
-    if (axAlphaMutationDepth > 0 || axofApplyingAlpha) { %orig(alpha); return; }
-    %orig(alpha);
-    AXApplySearchEntranceHide((UIView *)self);
-    AXApplyOverlayLeafAlpha((UIView *)self);
-    AXOF_ApplyView((UIView *)self);
-}
-%end
 
 // AwemeX iPad 单指长按菜单：只追加保存按钮，不改菜单背景/布局
 // 用法：把本模块粘贴到现有 AwemeX_AlphaPro.xm 末尾，重新 make package。
