@@ -30,6 +30,7 @@ static BOOL axApplyingElementEffects = NO;
 static BOOL axSettingAlpha = NO;
 static BOOL axMainRefreshScheduled = NO;
 static BOOL axHideContinuityCached = NO;
+static BOOL axContinuityScanScheduled = NO;
 static UILongPressGestureRecognizer *axTwoFingerLongPressGesture = nil;
 static UIWindow *axTwoFingerLongPressWindow = nil;
 static char kAXSingleLongPressGestureKey;
@@ -816,6 +817,35 @@ static void AXHideLiteContinuityButtonIfNeeded(UIView *view) {
     AXSetContinuityHidden(target, YES);
 }
 
+
+static void AXScanContinuityRecursive(UIView *view, NSInteger depth) {
+    if (!view || depth > 8 || AXIsAwemeXPanelView(view)) return;
+    AXHideLiteContinuityButtonIfNeeded(view);
+    for (UIView *sub in [view.subviews copy]) {
+        AXScanContinuityRecursive(sub, depth + 1);
+    }
+}
+
+static void AXForceScanContinuityNow(void) {
+    if (!axHideContinuityCached) return;
+    for (UIWindow *w in UIApplication.sharedApplication.windows) {
+        if (!w || w.hidden || AXIsAwemeXPanelView(w)) continue;
+        AXScanContinuityRecursive(w, 0);
+    }
+}
+
+static void AXScheduleContinuityRescan(void) {
+    if (!axHideContinuityCached || axContinuityScanScheduled) return;
+    axContinuityScanScheduled = YES;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        AXForceScanContinuityNow();
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.38 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        AXForceScanContinuityNow();
+        axContinuityScanScheduled = NO;
+    });
+}
+
 static void AXApplyTopBarEffects(UIView *v) {
     if (!v || AXIsAwemeXPanelView(v)) return;
     [AXTrackedTopBarViews() addObject:v];
@@ -1069,7 +1099,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     [aboutCard addSubview:versionTitle];
 
     UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
-    versionValue.text = @"V39";
+    versionValue.text = @"V40";
     versionValue.textColor = AXPanelSubTextColor();
     versionValue.font = [UIFont boldSystemFontOfSize:14];
     versionValue.textAlignment = NSTextAlignmentRight;
@@ -1173,7 +1203,10 @@ static void AXReloadSettingsContent(BOOL animated) {
     else if (sender.tag == 29) key = kAXAutoCopyLinkOnSaveFail;
     if (!key) return;
     AXSet(key, @(sender.on));
-    if (sender.tag == 14) axHideContinuityCached = sender.on;
+    if (sender.tag == 14) {
+        axHideContinuityCached = sender.on;
+        if (sender.on) AXScheduleContinuityRescan();
+    }
     if (sender.tag == 16) {
         AXApplySettingsChromeTheme();
         AXReloadSettingsContent(NO);
@@ -1244,7 +1277,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         [panel addSubview:close];
 
         UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(24, 58, panelW - 48, 24)];
-        sub.text = @"AwemeX for iPad · 当前版本 V39";
+        sub.text = @"AwemeX for iPad · 当前版本 V40";
         sub.textColor = [UIColor colorWithWhite:0.35 alpha:1.0];
         sub.font = [UIFont systemFontOfSize:13];
         [panel addSubview:sub];
@@ -1258,9 +1291,11 @@ static void AXReloadSettingsContent(BOOL animated) {
         text.textContainerInset = UIEdgeInsetsMake(0, 0, 20, 0);
         text.font = [UIFont systemFontOfSize:14];
         text.textColor = [UIColor colorWithWhite:0.18 alpha:1.0];
-        text.text = @"V39（右侧连播隐藏强力命中）\n"
-                    "· 增强抖音极速版右侧中间“连播”独立浮层的隐藏命中。\n"
-                    "· 保持左上菜单隐藏、透明度、保存面板与音效等稳定逻辑不动。\n\n"
+        text.text = @"V40（右侧连播开关即时刷新）\n"
+                    "· 修复隐藏右侧连播关闭后再打开需要重启抖音才生效的问题。\n"
+                    "· 保持 V39 的连播强力命中逻辑、左上菜单隐藏、透明度、保存面板与音效等稳定逻辑不动。\n\n"
+                    "V39（右侧连播隐藏强力命中）\n"
+                    "· 增强抖音极速版右侧中间“连播”独立浮层的隐藏命中。\n\n"
                     "V37（极速版界面隐藏增强）\n"
                     "· 界面设置新增隐藏左上菜单和隐藏右侧连播两个开关。\n"
                     "· 两个隐藏项只在首页播放页/顶栏容器内处理，保持已稳定功能不动。\n\n"
