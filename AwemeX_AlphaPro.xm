@@ -836,7 +836,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     [aboutCard addSubview:versionTitle];
 
     UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
-    versionValue.text = @"V32";
+    versionValue.text = @"V33";
     versionValue.textColor = AXPanelSubTextColor();
     versionValue.font = [UIFont boldSystemFontOfSize:14];
     versionValue.textAlignment = NSTextAlignmentRight;
@@ -1007,7 +1007,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         [panel addSubview:close];
 
         UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(24, 58, panelW - 48, 24)];
-        sub.text = @"AwemeX for iPad · 当前版本 V32";
+        sub.text = @"AwemeX for iPad · 当前版本 V33";
         sub.textColor = [UIColor colorWithWhite:0.35 alpha:1.0];
         sub.font = [UIFont systemFontOfSize:13];
         [panel addSubview:sub];
@@ -1475,14 +1475,50 @@ static void AXSB_Toast(NSString *text) {
 }
 
 
+static SystemSoundID AXSBSaveSuccessSoundID = 0;
+static BOOL AXSBSaveSuccessSoundPrepared = NO;
+
+static SystemSoundID AXSB_PrepareSaveSuccessSoundID(void) {
+    if (AXSBSaveSuccessSoundPrepared) return AXSBSaveSuccessSoundID;
+    AXSBSaveSuccessSoundPrepared = YES;
+
+    NSArray<NSString *> *paths = @[
+        @"/System/Library/Audio/UISounds/payment_success.caf",
+        @"/System/Library/Audio/UISounds/SIMToolkitPositiveACK.caf",
+        @"/System/Library/Audio/UISounds/Tink.caf",
+        @"/System/Library/Audio/UISounds/Tock.caf",
+        @"/System/Library/Audio/UISounds/SentMessage.caf",
+        @"/System/Library/Audio/UISounds/ReceivedMessage.caf"
+    ];
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *path in paths) {
+        if (![fm fileExistsAtPath:path]) continue;
+        SystemSoundID sid = 0;
+        OSStatus status = AudioServicesCreateSystemSoundID((__bridge CFURLRef)[NSURL fileURLWithPath:path], &sid);
+        if (status == kAudioServicesNoError && sid != 0) {
+            AXSBSaveSuccessSoundID = sid;
+            break;
+        }
+    }
+
+    return AXSBSaveSuccessSoundID;
+}
+
 static void AXSB_PlaySaveSuccessFeedback(void) {
     if (!AXBool(kAXSaveSuccessSound, YES)) return;
     dispatch_async(dispatch_get_main_queue(), ^{
-        AudioServicesPlaySystemSound(1057);
         if (@available(iOS 10.0, *)) {
-            UIImpactFeedbackGenerator *generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+            UINotificationFeedbackGenerator *generator = [[UINotificationFeedbackGenerator alloc] init];
             [generator prepare];
-            [generator impactOccurred];
+            [generator notificationOccurred:UINotificationFeedbackTypeSuccess];
+        }
+
+        SystemSoundID sid = AXSB_PrepareSaveSuccessSoundID();
+        if (sid != 0) {
+            AudioServicesPlaySystemSound(sid);
+        } else {
+            AudioServicesPlayAlertSound(1007);
         }
     });
 }
