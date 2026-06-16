@@ -45,6 +45,8 @@ static NSString * const kAXHideSearch = @"ax_hide_search";
 static NSString * const kAXShowButton = @"ax_show_button";
 static NSString * const kAXOFNicknameDescAlpha = @"ax_nickname_desc_alpha";
 static NSString * const kAXHideRelatedArea = @"ax_hide_related_area";
+static NSString * const kAXHideLeftMenu = @"ax_hide_left_menu";
+static NSString * const kAXHideContinuityButton = @"ax_hide_continuity_button";
 
 // 单指长按面板功能开关：来自 DYYY 长按面板保存类功能；不包含“生成视频/制作视频”。
 static NSString * const kAXLPPanelSaveVideo = @"ax_lp_panel_save_video";
@@ -517,6 +519,8 @@ static BOOL AXShouldHideRelatedModel(id obj) {
     return [refer containsString:@"homepage"] || [refer isEqualToString:@"homepage_hot"] || [refer isEqualToString:@"homepage_familiar"] || [refer isEqualToString:@"homepage_follow"];
 }
 
+static void AXApplyRightSideExtraHides(UIView *rightStack);
+
 static void AXApplyElementEffects(UIView *v) {
     if (!v || AXIsAwemeXPanelView(v) || !AXIsHomeFeedContext(v)) return;
     if (axApplyingElementEffects) return;
@@ -528,6 +532,7 @@ static void AXApplyElementEffects(UIView *v) {
         CGAffineTransform t = AXRightStackTargetTransform(v);
         if (!CGAffineTransformEqualToTransform(v.transform, t)) v.transform = t;
         AXApplyAlphaKeepingBase(v, AXEffectiveAlpha(kAXRightAlpha, 0.80));
+        AXApplyRightSideExtraHides(v);
         axApplyingElementEffects = NO;
         return;
     }
@@ -593,11 +598,111 @@ static void AXApplyTopBarSearchRecursive(UIView *root, NSInteger depth) {
     }
 }
 
+static CGRect AXWindowFrameForView(UIView *v) {
+    if (!v || !v.superview) return CGRectNull;
+    UIWindow *w = v.window ?: AXKeyWindow();
+    if (!w) return CGRectNull;
+    return [v.superview convertRect:v.frame toView:w];
+}
+
+static char kAXLeftMenuHiddenMarkKey;
+static void AXSetLeftMenuHidden(UIView *v, BOOL hidden) {
+    if (!v || AXIsAwemeXPanelView(v)) return;
+    objc_setAssociatedObject(v, &kAXLeftMenuHiddenMarkKey, hidden ? (id)@YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    v.hidden = hidden;
+    v.userInteractionEnabled = !hidden;
+}
+
+static BOOL AXIsTopLeftMenuCandidate(UIView *v) {
+    if (!v || AXIsAwemeXPanelView(v)) return NO;
+    CGRect f = AXWindowFrameForView(v);
+    if (CGRectIsNull(f) || CGRectIsEmpty(f)) return NO;
+    CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
+    CGFloat screenH = UIScreen.mainScreen.bounds.size.height;
+    BOOL inTopLeft = (f.origin.x < screenW * 0.22 && f.origin.y < screenH * 0.16);
+    BOOL reasonableSize = (f.size.width >= 12.0 && f.size.height >= 12.0 && f.size.width <= 90.0 && f.size.height <= 90.0);
+    if (!inTopLeft || !reasonableSize) return NO;
+    NSString *cls = NSStringFromClass(v.class);
+    NSString *txt = AXViewText(v);
+    NSArray *needles = @[@"SideBar", @"Sidebar", @"sideBar", @"LeftSide", @"leftSide", @"Drawer", @"Hamburger", @"Menu", @"menu", @"More", @"more", @"菜单", @"三横", @"更多"];
+    if (AXStringContainsAny(cls, needles) || AXStringContainsAny(txt, needles)) return YES;
+    return [v isKindOfClass:UIControl.class] || [v isKindOfClass:UIImageView.class] || [cls containsString:@"Button"] || [cls containsString:@"Image"];
+}
+
+static void AXApplyTopBarLeftMenuRecursive(UIView *root, NSInteger depth) {
+    if (!root || depth > 6) return;
+    BOOL shouldHide = AXBool(kAXHideLeftMenu, NO);
+    for (UIView *sub in [root.subviews copy]) {
+        NSNumber *marked = objc_getAssociatedObject(sub, &kAXLeftMenuHiddenMarkKey);
+        if (!shouldHide && marked.boolValue) AXSetLeftMenuHidden(sub, NO);
+        if (shouldHide && AXIsTopLeftMenuCandidate(sub)) AXSetLeftMenuHidden(sub, YES);
+        AXApplyTopBarLeftMenuRecursive(sub, depth + 1);
+    }
+}
+
+static char kAXContinuityHiddenMarkKey;
+static void AXSetContinuityHidden(UIView *v, BOOL hidden) {
+    if (!v || AXIsAwemeXPanelView(v)) return;
+    objc_setAssociatedObject(v, &kAXContinuityHiddenMarkKey, hidden ? (id)@YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    v.hidden = hidden;
+    v.userInteractionEnabled = !hidden;
+}
+
+static BOOL AXIsContinuityCandidate(UIView *v) {
+    if (!v || AXIsAwemeXPanelView(v)) return NO;
+    NSString *txt = AXViewText(v);
+    NSString *cls = NSStringFromClass(v.class);
+    NSArray *textNeedles = @[@"连播", @"连续播放", @"自动连播"];
+    BOOL textHit = AXStringContainsAny(txt, textNeedles);
+    NSArray *classNeedles = @[@"ContinuePlay", @"Continuous", @"AutoPlay", @"SerialPlay", @"LoopPlay", @"FeedContinue", @"LianBo"];
+    BOOL classHit = AXStringContainsAny(cls, classNeedles);
+    if (!textHit && !classHit) return NO;
+    CGRect f = AXWindowFrameForView(v);
+    if (CGRectIsNull(f) || CGRectIsEmpty(f)) return YES;
+    CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
+    CGFloat screenH = UIScreen.mainScreen.bounds.size.height;
+    return f.origin.x > screenW * 0.60 && f.origin.y > screenH * 0.18 && f.origin.y < screenH * 0.88;
+}
+
+static UIView *AXBestContinuityContainer(UIView *hit, UIView *root) {
+    if (!hit || !root) return hit;
+    UIView *candidate = hit;
+    UIView *cur = hit;
+    while (cur.superview && cur.superview != root) {
+        CGRect f = cur.frame;
+        if (f.size.width > 0 && f.size.height > 0 && f.size.width <= 160.0 && f.size.height <= 150.0) candidate = cur;
+        cur = cur.superview;
+    }
+    return candidate ?: hit;
+}
+
+static void AXApplyContinuityHideRecursive(UIView *root, UIView *container, NSInteger depth) {
+    if (!root || !container || depth > 7) return;
+    BOOL shouldHide = AXBool(kAXHideContinuityButton, NO);
+    NSNumber *marked = objc_getAssociatedObject(root, &kAXContinuityHiddenMarkKey);
+    if (!shouldHide && marked.boolValue) AXSetContinuityHidden(root, NO);
+    for (UIView *sub in [root.subviews copy]) {
+        NSNumber *subMarked = objc_getAssociatedObject(sub, &kAXContinuityHiddenMarkKey);
+        if (!shouldHide && subMarked.boolValue) AXSetContinuityHidden(sub, NO);
+        if (shouldHide && AXIsContinuityCandidate(sub)) {
+            UIView *target = AXBestContinuityContainer(sub, container);
+            if (target && target != container) AXSetContinuityHidden(target, YES);
+        }
+        AXApplyContinuityHideRecursive(sub, container, depth + 1);
+    }
+}
+
+static void AXApplyRightSideExtraHides(UIView *rightStack) {
+    if (!rightStack || AXIsAwemeXPanelView(rightStack)) return;
+    AXApplyContinuityHideRecursive(rightStack, rightStack, 0);
+}
+
 static void AXApplyTopBarEffects(UIView *v) {
     if (!v || AXIsAwemeXPanelView(v)) return;
     [AXTrackedTopBarViews() addObject:v];
     AXApplyAlphaKeepingBase(v, AXEffectiveAlpha(kAXTopAlpha, 0.65));
     AXApplyTopBarSearchRecursive(v, 0);
+    AXApplyTopBarLeftMenuRecursive(v, 0);
 }
 
 static void AXRefreshButton(void) {
@@ -756,9 +861,9 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
         y += 64.0;
         }
 
-        NSArray *switchNames = @[@"隐藏右上搜索", @"隐藏相关搜索/合集", @"显示 AX 悬浮按钮", @"浅色设置面板"];
-        NSArray *switchKeys = @[kAXHideSearch, kAXHideRelatedArea, kAXShowButton, kAXPanelLightMode];
-        NSArray *switchDefs = @[@NO, @NO, @YES, @NO];
+        NSArray *switchNames = @[@"隐藏右上搜索", @"隐藏相关搜索/合集", @"隐藏左上菜单", @"隐藏右侧连播", @"显示 AX 悬浮按钮", @"浅色设置面板"];
+        NSArray *switchKeys = @[kAXHideSearch, kAXHideRelatedArea, kAXHideLeftMenu, kAXHideContinuityButton, kAXShowButton, kAXPanelLightMode];
+        NSArray *switchDefs = @[@NO, @NO, @NO, @NO, @YES, @NO];
         for (NSInteger i = 0; i < (NSInteger)switchNames.count; i++) {
         UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(30, y, width - 130, 34)];
         l.text = switchNames[i];
@@ -838,7 +943,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     [aboutCard addSubview:versionTitle];
 
     UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
-    versionValue.text = @"V36";
+    versionValue.text = @"V37";
     versionValue.textColor = AXPanelSubTextColor();
     versionValue.font = [UIFont boldSystemFontOfSize:14];
     versionValue.textAlignment = NSTextAlignmentRight;
@@ -927,8 +1032,10 @@ static void AXReloadSettingsContent(BOOL animated) {
     NSString *key = nil;
     if (sender.tag == 11) key = kAXHideSearch;
     else if (sender.tag == 12) key = kAXHideRelatedArea;
-    else if (sender.tag == 13) key = kAXShowButton;
-    else if (sender.tag == 14) key = kAXPanelLightMode;
+    else if (sender.tag == 13) key = kAXHideLeftMenu;
+    else if (sender.tag == 14) key = kAXHideContinuityButton;
+    else if (sender.tag == 15) key = kAXShowButton;
+    else if (sender.tag == 16) key = kAXPanelLightMode;
     else if (sender.tag == 21) key = kAXLPPanelSaveVideo;
     else if (sender.tag == 22) key = kAXLPPanelSaveCover;
     else if (sender.tag == 23) key = kAXLPPanelSaveAudio;
@@ -940,7 +1047,7 @@ static void AXReloadSettingsContent(BOOL animated) {
     else if (sender.tag == 29) key = kAXAutoCopyLinkOnSaveFail;
     if (!key) return;
     AXSet(key, @(sender.on));
-    if (sender.tag == 14) {
+    if (sender.tag == 16) {
         AXApplySettingsChromeTheme();
         AXReloadSettingsContent(NO);
         return;
@@ -1010,7 +1117,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         [panel addSubview:close];
 
         UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(24, 58, panelW - 48, 24)];
-        sub.text = @"AwemeX for iPad · 当前版本 V36";
+        sub.text = @"AwemeX for iPad · 当前版本 V37";
         sub.textColor = [UIColor colorWithWhite:0.35 alpha:1.0];
         sub.font = [UIFont systemFontOfSize:13];
         [panel addSubview:sub];
@@ -1024,7 +1131,10 @@ static void AXReloadSettingsContent(BOOL animated) {
         text.textContainerInset = UIEdgeInsetsMake(0, 0, 20, 0);
         text.font = [UIFont systemFontOfSize:14];
         text.textColor = [UIColor colorWithWhite:0.18 alpha:1.0];
-        text.text = @"V36（发布整理版）\n"
+        text.text = @"V37（极速版界面隐藏增强）\n"
+                    "· 界面设置新增隐藏左上菜单和隐藏右侧连播两个开关。\n"
+                    "· 两个隐藏项只在首页播放页/顶栏容器内处理，保持已稳定功能不动。\n\n"
+                    "V36（发布整理版）\n"
                     "· 版本号统一为 V36，control 版本同步为 10.7-36。\n"
                     "· 补全 V31-V35 更新日志，整理发布说明。\n"
                     "· 保持已稳定的透明度、缩放、长按面板、音效与保存失败兜底逻辑不动。\n\n"
