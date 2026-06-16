@@ -1250,13 +1250,6 @@ static id AXSB_CurrentAwemeModel(void) {
     return axCurrentLongPressAweme;
 }
 
-static NSURL *AXSB_VideoURLFromAweme(id aweme) {
-    if (!aweme) return nil;
-    id video = AXSB_Send0(aweme, @selector(video));
-    NSURL *u = AXSB_FirstURLBySelectors(video ?: aweme, @[@"downloadAddr", @"playAddr", @"h264PlayAddr", @"h264URL", @"playURL", @"playApi", @"bitRate", @"video"], 6);
-    return u ?: AXSB_FirstURLInObject(video ?: aweme, 5);
-}
-
 static NSURL *AXSB_CoverURLFromAweme(id aweme) {
     if (!aweme) return nil;
     id video = AXSB_Send0(aweme, @selector(video));
