@@ -8,6 +8,9 @@
 @interface AWEFeedTopBarContainer : UIView @end
 @interface AWESearchEntranceView : UIView @end
 @interface AWEHPDiscoverFeedEntranceView : UIView @end
+@interface AWEPlayInteractionSearchAnchorView : UIView @end
+@interface AWEFeedAnchorContainerView : UIView @end
+@interface AWEAwemeModel : NSObject @end
 @interface AWEPlayInteractionViewController : UIViewController @end
 
 static UIButton *axButton = nil;
@@ -365,7 +368,7 @@ static BOOL AXIsRelatedTextOrClass(UIView *v) {
     NSArray *needles = @[@"相关搜索", @"搜一搜", @"猜你想搜", @"大家都在搜", @"看合集", @"合集", @"下一集", @"上一集", @"第", @"集"];
     if (AXStringContainsAny(txt, needles)) return YES;
     NSString *cls = NSStringFromClass(v.class);
-    NSArray *classNeedles = @[@"RelatedSearch", @"SearchAnchor", @"Collection", @"Mix", @"Series", @"Compilation"];
+    NSArray *classNeedles = @[@"RelatedSearch", @"SearchAnchor", @"SearchAnchorView", @"FeedAnchor", @"AnchorContainer", @"Collection", @"Mix", @"MixVideo", @"Series", @"Compilation", @"Playlet", @"RelatedVideo"];
     return AXStringContainsAny(cls, classNeedles);
 }
 
@@ -414,6 +417,30 @@ static void AXApplyRelatedAreaVisibility(UIView *leftStack) {
         return;
     }
     AXHideRelatedVisibilityRecursive(leftStack, leftStack, 0);
+}
+
+static void AXApplyRelatedDirectVisibility(UIView *view) {
+    if (!view || AXIsAwemeXPanelView(view)) return;
+    BOOL shouldHide = AXBool(kAXHideRelatedArea, NO) && AXIsHomeFeedContext(view);
+    NSNumber *marked = objc_getAssociatedObject(view, &kAXRelatedHiddenMarkKey);
+    if (shouldHide) {
+        AXSetMarkedHidden(view, YES);
+    } else if (marked.boolValue) {
+        AXSetMarkedHidden(view, NO);
+    }
+}
+
+static NSString *AXModelReferString(id obj) {
+    if (!obj || ![obj respondsToSelector:@selector(referString)]) return @"";
+    NSString *refer = ((NSString *(*)(id, SEL))objc_msgSend)(obj, @selector(referString));
+    return [refer isKindOfClass:NSString.class] ? refer : @"";
+}
+
+static BOOL AXShouldHideRelatedModel(id obj) {
+    if (!AXBool(kAXHideRelatedArea, NO)) return NO;
+    NSString *refer = AXModelReferString(obj);
+    if (refer.length == 0) return YES;
+    return [refer containsString:@"homepage"] || [refer isEqualToString:@"homepage_hot"] || [refer isEqualToString:@"homepage_familiar"] || [refer isEqualToString:@"homepage_follow"];
 }
 
 static void AXApplyElementEffects(UIView *v) {
@@ -710,7 +737,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         }
 
         UILabel *note = [[UILabel alloc] initWithFrame:CGRectMake(30, height - 94, width - 60, 40)];
-        note.text = @"V41：性能优先；无全局 UILabel/UIButton/UIImageView 钩子；相关搜索改为隐藏开关。";
+        note.text = @"V42：保持 v17 性能；相关搜索/合集改为模型+锚点容器隐藏。";
         note.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.55];
         note.font = [UIFont systemFontOfSize:11];
         note.numberOfLines = 2;
@@ -843,6 +870,30 @@ static void AXShow(void) {
 %hook AWEHPDiscoverFeedEntranceView
 - (void)layoutSubviews { %orig; AXApplySearchEntranceHide((UIView *)(id)self); }
 - (void)didMoveToWindow { %orig; AXApplySearchEntranceHide((UIView *)(id)self); }
+%end
+
+%hook AWEPlayInteractionSearchAnchorView
+- (void)layoutSubviews { %orig; AXApplyRelatedDirectVisibility((UIView *)(id)self); }
+- (void)didMoveToWindow { %orig; AXApplyRelatedDirectVisibility((UIView *)(id)self); }
+%end
+
+%hook AWEFeedAnchorContainerView
+- (void)layoutSubviews { %orig; AXApplyRelatedDirectVisibility((UIView *)(id)self); }
+- (void)didMoveToWindow { %orig; AXApplyRelatedDirectVisibility((UIView *)(id)self); }
+%end
+
+%hook AWEAwemeModel
+- (id)relatedVideoExtra { if (AXShouldHideRelatedModel((id)self)) return nil; return %orig; }
+- (id)relatedVideo { if (AXShouldHideRelatedModel((id)self)) return nil; return %orig; }
+- (id)playletRelatedVideoInfoModel { if (AXShouldHideRelatedModel((id)self)) return nil; return %orig; }
+- (id)mixInfo { if (AXShouldHideRelatedModel((id)self)) return nil; return %orig; }
+- (id)playletInfoModel { if (AXShouldHideRelatedModel((id)self)) return nil; return %orig; }
+- (id)anchorInfo { if (AXShouldHideRelatedModel((id)self)) return nil; return %orig; }
+- (void)setAnchorInfo:(id)info { if (AXShouldHideRelatedModel((id)self)) { %orig(nil); return; } %orig; }
+- (id)commonAnchor { if (AXShouldHideRelatedModel((id)self)) return nil; return %orig; }
+- (void)setCommonAnchor:(id)anchor { if (AXShouldHideRelatedModel((id)self)) { %orig(nil); return; } %orig; }
+- (id)commonSearchAnchor { if (AXShouldHideRelatedModel((id)self)) return nil; return %orig; }
+- (void)setCommonSearchAnchor:(id)anchor { if (AXShouldHideRelatedModel((id)self)) { %orig(nil); return; } %orig; }
 %end
 
 // AwemeX iPad 单指长按菜单：只追加保存按钮，不改菜单背景/布局
