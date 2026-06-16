@@ -15,6 +15,7 @@
 
 static UIButton *axButton = nil;
 static UIView *axPanel = nil;
+static UIView *axPanelContent = nil;
 static BOOL axApplyingElementEffects = NO;
 static BOOL axSettingAlpha = NO;
 static BOOL axMainRefreshScheduled = NO;
@@ -40,6 +41,7 @@ static NSString * const kAXLPPanelSaveImage = @"ax_lp_panel_save_image";
 static NSString * const kAXLPPanelSaveAllImages = @"ax_lp_panel_save_all_images";
 static NSString * const kAXLPPanelCopyText = @"ax_lp_panel_copy_text";
 static NSString * const kAXLPPanelSettingsExpanded = @"ax_lp_panel_settings_expanded";
+static NSString * const kAXUISettingsExpanded = @"ax_ui_settings_expanded";
 
 static CGFloat AXFloat(NSString *key, CGFloat def) {
     id v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
@@ -580,18 +582,19 @@ static void AXResetTransformRecursive(UIView *view) {
 }
 
 static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat panelWidth) {
+    UIView *host = axPanelContent ?: axPanel;
     UILabel *l = [[UILabel alloc] initWithFrame:frame];
     l.text = text;
     l.textColor = UIColor.whiteColor;
     l.font = [UIFont boldSystemFontOfSize:15];
-    [axPanel addSubview:l];
+    [host addSubview:l];
 
     UILabel *r = [[UILabel alloc] initWithFrame:CGRectMake(panelWidth - 110, frame.origin.y, 80, frame.size.height)];
     r.textAlignment = NSTextAlignmentRight;
     r.textColor = UIColor.whiteColor;
     r.font = [UIFont systemFontOfSize:14];
     r.text = [NSString stringWithFormat:@"%.0f%%", value * 100.0];
-    [axPanel addSubview:r];
+    [host addSubview:r];
     return r;
 }
 
@@ -603,6 +606,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
 - (void)sliderCommit:(UISlider *)sender;
 - (void)switchChanged:(UISwitch *)sender;
 - (void)toggleLongPressPanelSettings;
+- (void)toggleUISettings;
 @end
 
 @interface AXTwoFingerLongPressTarget : NSObject <UIGestureRecognizerDelegate>
@@ -645,6 +649,7 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
 - (void)closeSettings {
     [axPanel removeFromSuperview];
     axPanel = nil;
+    axPanelContent = nil;
     AXRefreshButton();
 }
 
@@ -688,6 +693,13 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
     dispatch_async(dispatch_get_main_queue(), ^{ [[AXMenuTarget shared] openSettings]; });
 }
 
+- (void)toggleUISettings {
+    BOOL expanded = AXBool(kAXUISettingsExpanded, YES);
+    AXSet(kAXUISettingsExpanded, @(!expanded));
+    [self closeSettings];
+    dispatch_async(dispatch_get_main_queue(), ^{ [[AXMenuTarget shared] openSettings]; });
+}
+
 - (void)openSettings {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *w = AXKeyWindow();
@@ -695,11 +707,11 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         if (axPanel) { [self closeSettings]; return; }
 
         CGRect b = UIScreen.mainScreen.bounds;
-        CGFloat width = MIN(390.0, b.size.width - 90.0);
-        CGFloat height = MIN(720.0, b.size.height - 50.0);
+        CGFloat width = MIN(430.0, b.size.width - 90.0);
+        CGFloat height = MIN(760.0, b.size.height - 60.0);
         axPanel = [[UIView alloc] initWithFrame:CGRectMake((b.size.width - width) / 2.0, (b.size.height - height) / 2.0, width, height)];
         axPanel.tag = 42029;
-        axPanel.backgroundColor = [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.86];
+        axPanel.backgroundColor = [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.88];
         axPanel.layer.cornerRadius = 20;
         axPanel.clipsToBounds = YES;
         axPanel.userInteractionEnabled = YES;
@@ -708,100 +720,137 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
         [w addSubview:axPanel];
         [w bringSubviewToFront:axPanel];
 
-        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 20, width, 28)];
-        title.text = @"AwemeX 设置 V44";
+        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 18, width, 32)];
+        title.text = @"AwemeX 设置 V45";
         title.textColor = UIColor.whiteColor;
         title.font = [UIFont boldSystemFontOfSize:18];
         title.textAlignment = NSTextAlignmentCenter;
         [axPanel addSubview:title];
 
         UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-        close.frame = CGRectMake(width - 50, 18, 34, 34);
+        close.frame = CGRectMake(width - 52, 17, 36, 36);
         [close setTitle:@"×" forState:UIControlStateNormal];
         [close setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-        close.titleLabel.font = [UIFont boldSystemFontOfSize:23];
+        close.titleLabel.font = [UIFont boldSystemFontOfSize:24];
         [close addTarget:self action:@selector(closeSettings) forControlEvents:UIControlEventTouchUpInside];
         [axPanel addSubview:close];
 
-        NSArray *names = @[@"设置全局透明", @"顶部不透明度", @"右侧按钮不透明度", @"右侧按钮缩放比例", @"AX 图标不透明度", @"昵称文案缩放", @"昵称/文案不透明度"];
-        NSArray *keys = @[kAXGlobalAlpha, kAXTopAlpha, kAXRightAlpha, kAXScale, kAXIconAlpha, kAXNicknameScale, kAXOFNicknameDescAlpha];
-        NSArray *defs = @[@1.00, @0.65, @0.80, @0.81, @0.34, @1.00, @1.00];
-        for (NSInteger i = 0; i < (NSInteger)names.count; i++) {
-            CGFloat y = 62 + i * 61;
-            CGFloat cur = AXFloat(keys[i], [defs[i] floatValue]);
-            UILabel *val = AXLabel(names[i], cur, CGRectMake(30, y, 230, 24), width);
-            val.tag = 8000 + i + 1;
-            UISlider *s = [[UISlider alloc] initWithFrame:CGRectMake(30, y + 32, width - 60, 30)];
-            s.tag = i + 1;
-            BOOL isScaleSlider = (i == 3 || i == 5);
-            s.minimumValue = isScaleSlider ? 0.50 : 0.05;
-            s.maximumValue = isScaleSlider ? 1.30 : 1.00;
-            s.value = cur;
-            [s addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
-            [s addTarget:self action:@selector(sliderCommit:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
-            [axPanel addSubview:s];
-        }
+        UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 62, width, height - 70)];
+        scroll.alwaysBounceVertical = YES;
+        scroll.showsVerticalScrollIndicator = YES;
+        scroll.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
+        [axPanel addSubview:scroll];
 
-        NSArray *switchNames = @[@"隐藏右上搜索", @"隐藏相关搜索/合集", @"显示 AX 悬浮按钮"];
-        NSArray *switchKeys = @[kAXHideSearch, kAXHideRelatedArea, kAXShowButton];
-        NSArray *switchDefs = @[@NO, @NO, @YES];
-        for (NSInteger i = 0; i < (NSInteger)switchNames.count; i++) {
-            CGFloat y = 488 + i * 36;
-            UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(30, y, 230, 30)];
-            l.text = switchNames[i];
-            l.textColor = UIColor.whiteColor;
-            l.font = [UIFont boldSystemFontOfSize:15];
-            [axPanel addSubview:l];
-            UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(width - 85, y, 60, 32)];
-            sw.tag = 11 + i;
-            sw.on = AXBool(switchKeys[i], [switchDefs[i] boolValue]);
-            [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
-            [axPanel addSubview:sw];
+        axPanelContent = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 1000)];
+        [scroll addSubview:axPanelContent];
+
+        CGFloat y = 10.0;
+        BOOL uiExpanded = AXBool(kAXUISettingsExpanded, YES);
+        UIButton *uiHeader = [UIButton buttonWithType:UIButtonTypeCustom];
+        uiHeader.frame = CGRectMake(24, y, width - 48, 46);
+        uiHeader.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.065];
+        uiHeader.layer.cornerRadius = 13;
+        [uiHeader addTarget:self action:@selector(toggleUISettings) forControlEvents:UIControlEventTouchUpInside];
+        [axPanelContent addSubview:uiHeader];
+
+        UILabel *uiTitle = [[UILabel alloc] initWithFrame:CGRectMake(34, y + 9, width - 110, 28)];
+        uiTitle.text = @"界面设置";
+        uiTitle.textColor = UIColor.whiteColor;
+        uiTitle.font = [UIFont boldSystemFontOfSize:16];
+        [axPanelContent addSubview:uiTitle];
+
+        UILabel *uiArrow = [[UILabel alloc] initWithFrame:CGRectMake(width - 58, y + 9, 28, 28)];
+        uiArrow.text = uiExpanded ? @"⌃" : @"⌄";
+        uiArrow.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.86];
+        uiArrow.font = [UIFont boldSystemFontOfSize:18];
+        uiArrow.textAlignment = NSTextAlignmentCenter;
+        [axPanelContent addSubview:uiArrow];
+        y += 56.0;
+
+        if (uiExpanded) {
+            NSArray *names = @[@"设置全局透明", @"顶部不透明度", @"右侧按钮不透明度", @"右侧按钮缩放比例", @"AX 图标不透明度", @"昵称文案缩放", @"昵称/文案不透明度"];
+            NSArray *keys = @[kAXGlobalAlpha, kAXTopAlpha, kAXRightAlpha, kAXScale, kAXIconAlpha, kAXNicknameScale, kAXOFNicknameDescAlpha];
+            NSArray *defs = @[@1.00, @0.65, @0.80, @0.81, @0.34, @1.00, @1.00];
+            for (NSInteger i = 0; i < (NSInteger)names.count; i++) {
+                CGFloat cur = AXFloat(keys[i], [defs[i] floatValue]);
+                UILabel *val = AXLabel(names[i], cur, CGRectMake(30, y, width - 60, 24), width);
+                val.tag = 8000 + i + 1;
+                UISlider *sld = [[UISlider alloc] initWithFrame:CGRectMake(30, y + 30, width - 60, 30)];
+                sld.tag = i + 1;
+                BOOL isScaleSlider = (i == 3 || i == 5);
+                sld.minimumValue = isScaleSlider ? 0.50 : 0.05;
+                sld.maximumValue = isScaleSlider ? 1.30 : 1.00;
+                sld.value = cur;
+                [sld addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
+                [sld addTarget:self action:@selector(sliderCommit:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+                [axPanelContent addSubview:sld];
+                y += 64.0;
+            }
+
+            NSArray *switchNames = @[@"隐藏右上搜索", @"隐藏相关搜索/合集", @"显示 AX 悬浮按钮"];
+            NSArray *switchKeys = @[kAXHideSearch, kAXHideRelatedArea, kAXShowButton];
+            NSArray *switchDefs = @[@NO, @NO, @YES];
+            for (NSInteger i = 0; i < (NSInteger)switchNames.count; i++) {
+                UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(30, y, width - 130, 34)];
+                l.text = switchNames[i];
+                l.textColor = UIColor.whiteColor;
+                l.font = [UIFont boldSystemFontOfSize:15];
+                [axPanelContent addSubview:l];
+                UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(width - 88, y, 60, 32)];
+                sw.tag = 11 + i;
+                sw.on = AXBool(switchKeys[i], [switchDefs[i] boolValue]);
+                [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
+                [axPanelContent addSubview:sw];
+                y += 42.0;
+            }
+            y += 4.0;
         }
 
         BOOL lpExpanded = AXBool(kAXLPPanelSettingsExpanded, NO);
         UIButton *lpHeader = [UIButton buttonWithType:UIButtonTypeCustom];
-        lpHeader.frame = CGRectMake(24, 586, width - 48, 44);
-        lpHeader.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.055];
-        lpHeader.layer.cornerRadius = 12;
+        lpHeader.frame = CGRectMake(24, y, width - 48, 46);
+        lpHeader.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.065];
+        lpHeader.layer.cornerRadius = 13;
         [lpHeader addTarget:self action:@selector(toggleLongPressPanelSettings) forControlEvents:UIControlEventTouchUpInside];
-        [axPanel addSubview:lpHeader];
+        [axPanelContent addSubview:lpHeader];
 
-        UILabel *lpTitle = [[UILabel alloc] initWithFrame:CGRectMake(30, 594, width - 100, 28)];
+        UILabel *lpTitle = [[UILabel alloc] initWithFrame:CGRectMake(34, y + 9, width - 110, 28)];
         lpTitle.text = @"面板设置";
         lpTitle.textColor = UIColor.whiteColor;
-        lpTitle.font = [UIFont boldSystemFontOfSize:15];
-        [axPanel addSubview:lpTitle];
+        lpTitle.font = [UIFont boldSystemFontOfSize:16];
+        [axPanelContent addSubview:lpTitle];
 
-        UILabel *lpArrow = [[UILabel alloc] initWithFrame:CGRectMake(width - 58, 594, 28, 28)];
+        UILabel *lpArrow = [[UILabel alloc] initWithFrame:CGRectMake(width - 58, y + 9, 28, 28)];
         lpArrow.text = lpExpanded ? @"⌃" : @"⌄";
         lpArrow.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.86];
         lpArrow.font = [UIFont boldSystemFontOfSize:18];
         lpArrow.textAlignment = NSTextAlignmentCenter;
-        [axPanel addSubview:lpArrow];
+        [axPanelContent addSubview:lpArrow];
+        y += 56.0;
 
         if (lpExpanded) {
             NSArray *lpNames = @[@"保存视频", @"保存封面", @"保存音频", @"保存图片", @"保存所有图片", @"复制文案"];
             NSArray *lpKeys = @[kAXLPPanelSaveVideo, kAXLPPanelSaveCover, kAXLPPanelSaveAudio, kAXLPPanelSaveImage, kAXLPPanelSaveAllImages, kAXLPPanelCopyText];
             NSArray *lpDefs = @[@YES, @YES, @YES, @YES, @YES, @NO];
             for (NSInteger i = 0; i < (NSInteger)lpNames.count; i++) {
-                NSInteger col = i % 2;
-                NSInteger row = i / 2;
-                CGFloat baseX = col == 0 ? 30.0 : width / 2.0 + 8.0;
-                CGFloat y = 640.0 + row * 32.0;
-                UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(baseX, y, col == 0 ? 96.0 : 104.0, 30.0)];
+                UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(30, y, width - 130, 34.0)];
                 l.text = lpNames[i];
                 l.textColor = UIColor.whiteColor;
-                l.font = [UIFont boldSystemFontOfSize:12];
-                [axPanel addSubview:l];
+                l.font = [UIFont boldSystemFontOfSize:15];
+                [axPanelContent addSubview:l];
 
-                UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(baseX + (col == 0 ? 98.0 : 108.0), y - 1.0, 52.0, 32.0)];
+                UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(width - 88, y, 60.0, 32.0)];
                 sw.tag = 21 + i;
                 sw.on = AXBool(lpKeys[i], [lpDefs[i] boolValue]);
                 [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
-                [axPanel addSubview:sw];
+                [axPanelContent addSubview:sw];
+                y += 42.0;
             }
         }
+
+        y += 18.0;
+        axPanelContent.frame = CGRectMake(0, 0, width, MAX(y, scroll.bounds.size.height + 1.0));
+        scroll.contentSize = CGSizeMake(width, MAX(y, scroll.bounds.size.height + 1.0));
 
         AXResetTransformRecursive(axPanel);
         [w bringSubviewToFront:axPanel];
@@ -1283,7 +1332,78 @@ static BOOL AXSB_ShowLongPressPanel(id playVC) {
     return YES;
 }
 
+static char kAXSingleLongPressGestureKey;
+
+@interface AXSingleLongPressTarget : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+- (void)handleSingleLongPress:(UILongPressGestureRecognizer *)gesture;
+@end
+
+@implementation AXSingleLongPressTarget
++ (instancetype)shared {
+    static AXSingleLongPressTarget *target;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ target = [AXSingleLongPressTarget new]; });
+    return target;
+}
+
+- (void)handleSingleLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    UIViewController *vc = AXFirstViewControllerFromView(gesture.view);
+    if (!vc) return;
+    UIResponder *r = vc;
+    NSInteger steps = 0;
+    while (r && steps++ < 8) {
+        NSString *name = NSStringFromClass([r class]);
+        if ([name containsString:@"AWEPlayInteractionViewController"]) {
+            if (AXSB_ShowLongPressPanel((id)r)) return;
+        }
+        r = r.nextResponder;
+    }
+    AXSB_ShowLongPressPanel((id)vc);
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    UIView *touchedView = touch.view;
+    if (AXIsDescendantOf(touchedView, axPanel) || AXIsDescendantOf(touchedView, axButton)) return NO;
+    return YES;
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return YES;
+}
+@end
+
+static void AXInstallSingleLongPressForPlayVC(id playVC) {
+    if (!playVC) return;
+    UIView *view = AXSB_Send0(playVC, @selector(view));
+    if (![view isKindOfClass:UIView.class]) return;
+    UIGestureRecognizer *old = objc_getAssociatedObject(view, &kAXSingleLongPressGestureKey);
+    if (old) return;
+    UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc] initWithTarget:[AXSingleLongPressTarget shared] action:@selector(handleSingleLongPress:)];
+    gesture.minimumPressDuration = 0.55;
+    gesture.numberOfTouchesRequired = 1;
+    gesture.cancelsTouchesInView = NO;
+    gesture.delaysTouchesBegan = NO;
+    gesture.delaysTouchesEnded = NO;
+    gesture.delegate = [AXSingleLongPressTarget shared];
+    [view addGestureRecognizer:gesture];
+    objc_setAssociatedObject(view, &kAXSingleLongPressGestureKey, gesture, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 %hook AWEPlayInteractionViewController
+- (void)viewDidLoad {
+    %orig;
+    AXInstallSingleLongPressForPlayVC((id)self);
+}
+- (void)viewDidAppear:(BOOL)animated {
+    %orig(animated);
+    AXInstallSingleLongPressForPlayVC((id)self);
+}
+- (void)viewDidLayoutSubviews {
+    %orig;
+    AXInstallSingleLongPressForPlayVC((id)self);
+}
 - (void)showDislikeOnVideo {
     if (AXSB_ShowLongPressPanel((id)self)) return;
     %orig;
