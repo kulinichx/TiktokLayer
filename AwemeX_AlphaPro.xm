@@ -616,10 +616,12 @@ static UILabel *AXLabel(NSString *text, CGFloat value, CGRect frame, CGFloat pan
 - (void)switchChanged:(UISwitch *)sender;
 - (void)toggleLongPressPanelSettings;
 - (void)toggleUISettings;
+- (void)showUpdateLog;
 @end
 
 static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width);
 static void AXReloadSettingsContent(BOOL animated);
+static void AXSB_Toast(NSString *text);
 
 @interface AXTwoFingerLongPressTarget : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
@@ -657,7 +659,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
         [subview removeFromSuperview];
     }
     CGFloat y = 10.0;
-    BOOL uiExpanded = AXBool(kAXUISettingsExpanded, YES);
+    BOOL uiExpanded = AXBool(kAXUISettingsExpanded, NO);
     UIButton *uiHeader = [UIButton buttonWithType:UIButtonTypeCustom];
     uiHeader.frame = CGRectMake(24, y, width - 48, 46);
     uiHeader.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.065];
@@ -760,7 +762,62 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
         }
     }
 
-    y += 18.0;
+    y += 8.0;
+
+    UIView *aboutCard = [[UIView alloc] initWithFrame:CGRectMake(24, y, width - 48, 88)];
+    aboutCard.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.055];
+    aboutCard.layer.cornerRadius = 13;
+    aboutCard.clipsToBounds = YES;
+    [axPanelContent addSubview:aboutCard];
+
+    UILabel *versionIcon = [[UILabel alloc] initWithFrame:CGRectMake(14, 7, 34, 34)];
+    versionIcon.text = @"🎅";
+    versionIcon.font = [UIFont systemFontOfSize:20];
+    versionIcon.textAlignment = NSTextAlignmentCenter;
+    [aboutCard addSubview:versionIcon];
+
+    UILabel *versionTitle = [[UILabel alloc] initWithFrame:CGRectMake(54, 8, width - 180, 32)];
+    versionTitle.text = @"当前版本";
+    versionTitle.textColor = [UIColor colorWithRed:0.34 green:0.68 blue:1.0 alpha:1.0];
+    versionTitle.font = [UIFont boldSystemFontOfSize:15];
+    [aboutCard addSubview:versionTitle];
+
+    UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
+    versionValue.text = @"V47";
+    versionValue.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.72];
+    versionValue.font = [UIFont boldSystemFontOfSize:14];
+    versionValue.textAlignment = NSTextAlignmentRight;
+    [aboutCard addSubview:versionValue];
+
+    UIView *line = [[UIView alloc] initWithFrame:CGRectMake(54, 44, width - 126, 0.5)];
+    line.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.12];
+    [aboutCard addSubview:line];
+
+    UIButton *logButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    logButton.frame = CGRectMake(0, 45, width - 48, 43);
+    [logButton addTarget:[AXMenuTarget shared] action:@selector(showUpdateLog) forControlEvents:UIControlEventTouchUpInside];
+    [aboutCard addSubview:logButton];
+
+    UILabel *logIcon = [[UILabel alloc] initWithFrame:CGRectMake(14, 49, 34, 34)];
+    logIcon.text = @"📣";
+    logIcon.font = [UIFont systemFontOfSize:19];
+    logIcon.textAlignment = NSTextAlignmentCenter;
+    [aboutCard addSubview:logIcon];
+
+    UILabel *logTitle = [[UILabel alloc] initWithFrame:CGRectMake(54, 52, width - 170, 28)];
+    logTitle.text = @"更新日志";
+    logTitle.textColor = [UIColor colorWithRed:0.34 green:0.68 blue:1.0 alpha:1.0];
+    logTitle.font = [UIFont boldSystemFontOfSize:15];
+    [aboutCard addSubview:logTitle];
+
+    UILabel *logArrow = [[UILabel alloc] initWithFrame:CGRectMake(width - 84, 52, 26, 28)];
+    logArrow.text = @"›";
+    logArrow.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.45];
+    logArrow.font = [UIFont boldSystemFontOfSize:24];
+    logArrow.textAlignment = NSTextAlignmentRight;
+    [aboutCard addSubview:logArrow];
+
+    y += 108.0;
     CGFloat maxHeight = MAX(y, scroll.bounds.size.height + 1.0);
     axPanelContent.frame = CGRectMake(0, 0, width, maxHeight);
     scroll.contentSize = CGSizeMake(width, maxHeight);
@@ -840,6 +897,10 @@ static void AXReloadSettingsContent(BOOL animated) {
     AXReloadSettingsContent(YES);
 }
 
+- (void)showUpdateLog {
+    AXSB_Toast(@"V47：优化 iPad 设置面板尺寸与信息区；保存结果改为相册回调确认。");
+}
+
 - (void)openSettings {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *w = AXKeyWindow();
@@ -847,8 +908,9 @@ static void AXReloadSettingsContent(BOOL animated) {
         if (axPanel) { [self closeSettings]; return; }
 
         CGRect b = UIScreen.mainScreen.bounds;
-        CGFloat width = MIN(430.0, b.size.width - 90.0);
-        CGFloat height = MIN(760.0, b.size.height - 60.0);
+        CGFloat width = MIN(420.0, b.size.width - 120.0);
+        width = MAX(340.0, width);
+        CGFloat height = MIN(560.0, MAX(420.0, b.size.height * 0.58));
         axPanel = [[UIView alloc] initWithFrame:CGRectMake((b.size.width - width) / 2.0, (b.size.height - height) / 2.0, width, height)];
         axPanel.tag = 42029;
         axPanel.backgroundColor = [[UIColor colorWithWhite:0.08 alpha:1.0] colorWithAlphaComponent:0.88];
@@ -860,22 +922,22 @@ static void AXReloadSettingsContent(BOOL animated) {
         [w addSubview:axPanel];
         [w bringSubviewToFront:axPanel];
 
-        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 18, width, 32)];
-        title.text = @"AwemeX 设置 V46";
+        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 16, width, 30)];
+        title.text = @"AwemeX for iPad";
         title.textColor = UIColor.whiteColor;
         title.font = [UIFont boldSystemFontOfSize:18];
         title.textAlignment = NSTextAlignmentCenter;
         [axPanel addSubview:title];
 
         UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-        close.frame = CGRectMake(width - 52, 17, 36, 36);
+        close.frame = CGRectMake(width - 52, 14, 36, 36);
         [close setTitle:@"×" forState:UIControlStateNormal];
         [close setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
         close.titleLabel.font = [UIFont boldSystemFontOfSize:24];
         [close addTarget:self action:@selector(closeSettings) forControlEvents:UIControlEventTouchUpInside];
         [axPanel addSubview:close];
 
-        UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 62, width, height - 70)];
+        UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 56, width, height - 64)];
         scroll.alwaysBounceVertical = YES;
         scroll.showsVerticalScrollIndicator = YES;
         scroll.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
@@ -1042,6 +1104,8 @@ static id axCurrentLongPressAweme = nil;
 - (void)closeLongPressPanel;
 - (void)actionTapped:(UIButton *)sender;
 - (void)openNativeLongPressPanel;
+- (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error contextInfo:(void *)contextInfo;
+- (void)video:(NSString *)videoPath didFinishSavingWithError:(NSError *)error contextInfo:(void *)contextInfo;
 @end
 
 @interface AXSingleLongPressTarget : NSObject <UIGestureRecognizerDelegate>
@@ -1238,8 +1302,7 @@ static void AXSB_SaveImageURL(NSURL *url, NSString *name) {
     [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         UIImage *img = data ? [UIImage imageWithData:data] : nil;
         if (!img) { AXSB_Toast([NSString stringWithFormat:@"%@保存失败", name]); return; }
-        UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil);
-        AXSB_Toast([NSString stringWithFormat:@"%@已保存到相册", name]);
+        UIImageWriteToSavedPhotosAlbum(img, [AXLongPressPanelTarget shared], @selector(image:didFinishSavingWithError:contextInfo:), nil);
     }] resume];
 }
 
@@ -1254,8 +1317,8 @@ static void AXSB_SaveVideoURL(NSURL *url) {
         NSError *moveErr = nil;
         [[NSFileManager defaultManager] moveItemAtURL:location toURL:dst error:&moveErr];
         if (moveErr) { AXSB_Toast(@"视频缓存失败"); return; }
-        UISaveVideoAtPathToSavedPhotosAlbum(tmp, nil, nil, nil);
-        AXSB_Toast(@"视频已保存到相册");
+        if (!UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(tmp)) { AXSB_Toast(@"视频格式不兼容"); return; }
+        UISaveVideoAtPathToSavedPhotosAlbum(tmp, [AXLongPressPanelTarget shared], @selector(video:didFinishSavingWithError:contextInfo:), nil);
     }];
     [task resume];
 }
@@ -1480,6 +1543,14 @@ static void AXSB_ShowCustomLongPressPanelForAweme(id aweme, id playVC) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{ target = [AXLongPressPanelTarget new]; });
     return target;
+}
+
+- (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error contextInfo:(void *)contextInfo {
+    AXSB_Toast(error ? @"图片保存失败" : @"图片已保存到相册");
+}
+
+- (void)video:(NSString *)videoPath didFinishSavingWithError:(NSError *)error contextInfo:(void *)contextInfo {
+    AXSB_Toast(error ? @"视频保存失败" : @"视频已保存到相册");
 }
 
 - (void)closeLongPressPanel {
