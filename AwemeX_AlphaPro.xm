@@ -836,7 +836,7 @@ static void AXBuildSettingsContent(UIScrollView *scroll, CGFloat width) {
     [aboutCard addSubview:versionTitle];
 
     UILabel *versionValue = [[UILabel alloc] initWithFrame:CGRectMake(width - 150, 8, 96, 32)];
-    versionValue.text = @"V33";
+    versionValue.text = @"V34";
     versionValue.textColor = AXPanelSubTextColor();
     versionValue.font = [UIFont boldSystemFontOfSize:14];
     versionValue.textAlignment = NSTextAlignmentRight;
@@ -982,7 +982,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         CGFloat panelH = MIN(540.0, b.size.height * 0.54);
         panelH = MAX(360.0, panelH);
         UIView *panel = [[UIView alloc] initWithFrame:CGRectMake((b.size.width - panelW) / 2.0, (b.size.height - panelH) / 2.0, panelW, panelH)];
-        panel.backgroundColor = AXPanelStrongBackgroundColor();
+        panel.backgroundColor = [[UIColor colorWithWhite:0.97 alpha:1.0] colorWithAlphaComponent:0.96];
         panel.layer.cornerRadius = 18;
         panel.clipsToBounds = YES;
         [overlay addSubview:panel];
@@ -1007,7 +1007,7 @@ static void AXReloadSettingsContent(BOOL animated) {
         [panel addSubview:close];
 
         UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(24, 58, panelW - 48, 24)];
-        sub.text = @"AwemeX for iPad · 当前版本 V33";
+        sub.text = @"AwemeX for iPad · 当前版本 V34";
         sub.textColor = [UIColor colorWithWhite:0.35 alpha:1.0];
         sub.font = [UIFont systemFontOfSize:13];
         [panel addSubview:sub];
@@ -1021,7 +1021,13 @@ static void AXReloadSettingsContent(BOOL animated) {
         text.textContainerInset = UIEdgeInsetsMake(0, 0, 20, 0);
         text.font = [UIFont systemFontOfSize:14];
         text.textColor = [UIColor colorWithWhite:0.18 alpha:1.0];
-        text.text = @"V32（保存反馈版）\n"
+        text.text = @"V34（日志面板修正版）\n"
+                    "· 更新日志弹窗固定使用浅色样式，避免深色模式下文字看不清。\n"
+                    "· 仅调整更新日志 UI，不改动保存、透明度、长按面板等稳定逻辑。\n\n"
+                    "V33（成功音效修正版）\n"
+                    "· 保存完成音效改为优先加载系统声音文件，解决部分设备无声问题。\n"
+                    "· 保存成功后继续保留系统反馈。\n\n"
+                    "V32（保存反馈版）\n"
                     "· 面板设置新增保存成功音效开关。\n"
                     "· 图片和视频只有在系统相册回调成功后播放提示音与轻触反馈。\n"
                     "· 参考抖音图层的反馈体验，但不引入额外资源文件，保持 deb 结构简洁。\n\n"
