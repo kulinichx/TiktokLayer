@@ -1,9 +1,9 @@
-Package: com.kulinichx.tiktoklayer
-Name: TiktokLayer
-Version: 1.0.3
+Package: awemex.alphapro
+Name: AwemeX AlphaPro
+Version: 10.7-18
 Architecture: iphoneos-arm64
-Description: iPad layer UI adjustment for Douyin/Aweme.
+Description: iPad UI layer adjustment for Douyin/Aweme.
 Maintainer: kulinichx
 Author: kulinichx
 Section: Tweaks
-Depends: mobilesubstrate | ellekit
+Depends: mobilesubstrate, firmware (>= 14.0)
